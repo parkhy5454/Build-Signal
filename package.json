@@ -1,0 +1,19 @@
+{
+  "name": "build-signal",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Nationwide construction project intelligence and sales lead MVP",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js"
+  },
+  "engines": { "node": ">=20" },
+  "dependencies": {
+    "csv-stringify": "^6.5.2",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "helmet": "^8.0.0",
+    "pg": "^8.13.1"
+  }
+}

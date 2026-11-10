@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BUILD SIGNAL | 건설현장 영업정보</title>
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<aside class="sidebar">
+  <div class="brand"><div class="brand-mark">BS</div><div><b>BUILD SIGNAL</b><small>Construction Intelligence</small></div></div>
+  <nav>
+    <a class="active" href="#dashboard" data-page="dashboard">▦ 대시보드</a>
+    <a href="#projects" data-page="projects">⌕ 전국 현장 검색</a>
+    <a href="#recommend" data-page="recommend">✦ AI 영업 추천</a>
+    <a href="#favorites" data-page="favorites">☆ 관심 현장</a>
+  </nav>
+  <div class="sidebar-bottom"><span class="dot"></span> MVP 데이터 연결 대기<br><small>샘플 데이터와 실제 데이터 구분</small></div>
+</aside>
+<main class="main">
+<header class="topbar"><div><span class="eyebrow">NATIONWIDE CONSTRUCTION LEADS</span><h1 id="pageTitle">대시보드</h1></div><div class="top-actions"><span class="pill">전국 데이터</span><a class="button light" href="/api/export.csv">엑셀 다운로드 ↓</a></div></header>
+<section id="dashboard" class="page active">
+  <div class="hero"><div><span class="eyebrow light-text">BUILD SIGNAL INSIGHT</span><h2>공사가 시작되기 전에,<br>영업 기회를 먼저 발견하세요.</h2><p>전국 건설현장 데이터를 바탕으로 새로운 영업 기회를 찾습니다.</p><a class="button white" href="#projects" data-go="projects">현장 검색 시작 →</a></div><div class="hero-art">⌂<span>▥</span><i>✦</i></div></div>
+  <div class="stats">
+    <article class="stat"><span>누적 등록 현장</span><strong id="total">-</strong><small>데이터베이스 기준</small></article>
+    <article class="stat"><span>인허가</span><strong id="permit">-</strong><small>설계·자재 영업 기회</small></article>
+    <article class="stat"><span>착공</span><strong id="started">-</strong><small>시공·설비 영업 기회</small></article>
+    <article class="stat"><span>관심 현장</span><strong id="favoritesCount">-</strong><small>내 영업 후보</small></article>
+  </div>
+  <div class="section-head"><div><h3>최근 등록 현장</h3><p>최근 수집 또는 업데이트된 프로젝트</p></div><a href="#projects" data-go="projects">전체 보기 →</a></div>
+  <div id="recent" class="project-list"></div>
+  <div class="notice">ⓘ 현재 샘플 데이터는 화면 검증용 가상 정보입니다. 실제 공공기관 데이터 연동 후 실데이터로 교체됩니다.</div>
+</section>
+<section id="projects" class="page">
+  <div class="panel filters">
+    <label>키워드<input id="q" placeholder="현장명, 주소, 업체명 검색"></label>
+    <label>지역<select id="region"><option value="">전국 전체</option><option>서울특별시</option><option>경기도</option><option>인천광역시</option><option>부산광역시</option><option>대전광역시</option><option>제주특별자치도</option></select></label>
+    <label>진행 단계<select id="stage"><option value="">전체 단계</option><option value="PERMIT">인허가</option><option value="STARTED">착공</option><option value="COMPLETED">준공</option><option value="BID">입찰</option></select></label>
+    <label>건물 용도<input id="type" placeholder="예: 숙박시설"></label>
+    <button class="button primary" id="searchBtn">검색</button>
+  </div>
+  <div class="section-head"><div><h3>전국 건설현장</h3><p id="resultCount">검색 결과</p></div><a class="button light" href="/api/export.csv">CSV 다운로드</a></div>
+  <div id="projectResults" class="project-list"></div>
+</section>
+<section id="recommend" class="page">
+  <div class="panel"><h3>우리 제품에 맞는 영업현장 찾기</h3><p class="muted">영업 업종을 선택하면 건물 용도·규모·공정 단계에 따라 우선순위를 계산합니다.</p>
+  <div class="recommend-controls"><label>영업 업종<select id="profile"><option value="automation">자동제어·스마트빌딩</option><option value="electrical">전기·통신·소방</option><option value="hvac">조명·공조·HVAC</option><option value="materials">건축자재·설비</option></select></label><button class="button primary" id="recommendBtn">추천 현장 분석</button></div></div>
+  <div id="recommendResults" class="project-list"></div>
+</section>
+<section id="favorites" class="page"><div class="section-head"><div><h3>관심 현장</h3><p>영업 후보로 저장한 현장</p></div></div><div id="favoriteResults" class="project-list"></div></section>
+</main>
+<div id="modal" class="modal hidden"><div class="modal-card"><button class="close" id="closeModal">×</button><div id="modalBody"></div></div></div>
+<script src="/app.js"></script>
+</body></html>
