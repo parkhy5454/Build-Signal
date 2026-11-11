@@ -21,6 +21,18 @@ async function query(sql, params = []) {
 
 async function initDb() {
   await query(`
+    CREATE TABLE IF NOT EXISTS users (
+      id BIGSERIAL PRIMARY KEY,
+      email TEXT NOT NULL UNIQUE,
+      password_hash TEXT NOT NULL,
+      company_name TEXT NOT NULL DEFAULT '',
+      contact_name TEXT NOT NULL DEFAULT '',
+      role TEXT NOT NULL DEFAULT 'user',
+      status TEXT NOT NULL DEFAULT 'pending',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      approved_at TIMESTAMPTZ
+    );
+    CREATE INDEX IF NOT EXISTS idx_users_status ON users(status);
     CREATE TABLE IF NOT EXISTS projects (
       id BIGSERIAL PRIMARY KEY,
       source TEXT NOT NULL DEFAULT 'manual',

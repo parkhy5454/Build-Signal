@@ -3,6 +3,9 @@ const express = require("express");
 const helmet = require("helmet");
 const path = require("path");
 const crypto = require("crypto");
+const session = require("express-session");
+const PgSession = require("connect-pg-simple")(session);
+const bcrypt = require("bcryptjs");
 const { query, initDb } = require("./db");
 const { profiles, scoreProject } = require("./scoring");
 
@@ -10,6 +13,12 @@ const app = express();
 app.use(helmet({ contentSecurityPolicy: false }));
 app.use(express.json({ limit: "2mb" }));
 app.use(express.urlencoded({ extended: false }));
+app.use(session({
+  store: new PgSession({ conString: process.env.DATABASE_URL, createTableIfMissing: true, tableName: 'user_sessions' }),
+  secret: process.env.SESSION_SECRET || 'development-only-change-this-secret',
+  resave: false, saveUninitialized: false,
+  cookie: { httpOnly: true, sameSite: 'lax', secure: process.env.NODE_ENV === 'production', maxAge: 8 * 60 * 60 * 1000 }
+}));
 app.use(express.static(path.join(__dirname, "..", "public")));
 
 const STAGES = ["PERMIT", "STARTED", "COMPLETED", "BID", "UNKNOWN"];
@@ -27,6 +36,49 @@ function safeEqual(a, b) {
 }
 function normalizeDate(v) { return v ? String(v).slice(0, 10) : null; }
 
+async function loadUser(req, res, next) {
+  if (!req.session.userId) return res.status(401).json({ error: "로그인이 필요합니다.", code: "LOGIN_REQUIRED" });
+  try {
+    const r = await query("SELECT id,email,company_name,contact_name,role,status FROM users WHERE id=$1", [req.session.userId]);
+    if (!r.rowCount) { req.session.destroy(()=>{}); return res.status(401).json({ error: "계정을 찾을 수 없습니다." }); }
+    if (r.rows[0].status !== 'approved') return res.status(403).json({ error: "관리자 승인 대기 중인 계정입니다.", code: "PENDING_APPROVAL" });
+    req.user = r.rows[0]; next();
+  } catch (e) { next(e); }
+}
+function requireAdminRole(req,res,next) { if (req.user?.role !== 'admin') return res.status(403).json({error:'관리자 권한이 필요합니다.'}); next(); }
+
+app.get("/api/me", loadUser, (req,res)=>res.json({user:req.user}));
+app.post('/api/register', async (req,res)=>{
+  try {
+    const email=String(req.body.email||'').trim().toLowerCase();
+    const password=String(req.body.password||'');
+    const company=String(req.body.companyName||'').trim().slice(0,160);
+    const contact=String(req.body.contactName||'').trim().slice(0,80);
+    if (!/^\S+@\S+\.\S+$/.test(email)) return res.status(400).json({error:'올바른 이메일을 입력해 주세요.'});
+    if (password.length < 10) return res.status(400).json({error:'비밀번호는 10자 이상으로 설정해 주세요.'});
+    if (!company || !contact) return res.status(400).json({error:'회사명과 담당자명을 입력해 주세요.'});
+    const hash=await bcrypt.hash(password,12);
+    await query("INSERT INTO users(email,password_hash,company_name,contact_name,role,status) VALUES($1,$2,$3,$4,'user','pending')",[email,hash,company,contact]);
+    res.status(201).json({ok:true,message:'회원가입이 완료되었습니다. 관리자 승인 후 로그인할 수 있습니다.'});
+  } catch(e) { if(e.code==='23505') return res.status(409).json({error:'이미 가입된 이메일입니다.'}); res.status(500).json({error:'회원가입 중 오류가 발생했습니다.'}); }
+});
+app.post('/api/login', async (req,res)=>{
+  try {
+    const email=String(req.body.email||'').trim().toLowerCase(), password=String(req.body.password||'');
+    const r=await query('SELECT * FROM users WHERE email=$1',[email]);
+    if(!r.rowCount || !(await bcrypt.compare(password,r.rows[0].password_hash))) return res.status(401).json({error:'이메일 또는 비밀번호를 확인해 주세요.'});
+    const user=r.rows[0];
+    if(user.status!=='approved') return res.status(403).json({error:'가입 승인 대기 중입니다. 관리자 승인 후 이용할 수 있습니다.'});
+    req.session.userId=user.id;
+    res.json({ok:true,user:{email:user.email,role:user.role,contactName:user.contact_name}});
+  } catch(e){res.status(500).json({error:'로그인 처리 중 오류가 발생했습니다.'});}
+});
+app.post('/api/logout',(req,res)=>req.session.destroy(()=>{res.clearCookie('connect.sid');res.json({ok:true});}));
+app.get('/api/admin/users',loadUser,requireAdminRole,async(req,res)=>{const r=await query("SELECT id,email,company_name,contact_name,role,status,created_at FROM users ORDER BY created_at DESC");res.json({rows:r.rows});});
+app.post('/api/admin/users/:id/approve',loadUser,requireAdminRole,async(req,res)=>{const r=await query("UPDATE users SET status='approved',approved_at=NOW() WHERE id=$1 AND role<>'admin' RETURNING id",[req.params.id]);if(!r.rowCount)return res.status(404).json({error:'회원을 찾을 수 없습니다.'});res.json({ok:true});});
+app.post('/api/admin/users/:id/reject',loadUser,requireAdminRole,async(req,res)=>{const r=await query("DELETE FROM users WHERE id=$1 AND role<>'admin' RETURNING id",[req.params.id]);if(!r.rowCount)return res.status(404).json({error:'회원을 찾을 수 없습니다.'});res.json({ok:true});});
+app.use('/api', (req,res,next)=>{ if(['/api/health','/api/login','/api/register','/api/me','/api/logout','/api/ingest/projects','/api/admin/ingest-logs','/api/admin/demo-seed'].includes(req.path)) return next(); loadUser(req,res,next); });
+
 app.get("/api/health", async (req, res) => {
   try { await query("SELECT 1"); res.json({ ok: true, app: "BUILD SIGNAL", database: "connected" }); }
   catch (e) { res.status(503).json({ ok: false, error: e.message }); }
@@ -37,7 +89,7 @@ app.get("/api/dashboard", async (req, res) => {
     const total = await query("SELECT COUNT(*)::int AS n FROM projects");
     const byStage = await query("SELECT stage, COUNT(*)::int AS n FROM projects GROUP BY stage");
     const recent = await query("SELECT * FROM projects ORDER BY updated_at DESC LIMIT 6");
-    const favorites = await query("SELECT COUNT(*)::int AS n FROM favorites");
+    const favorites = await query("SELECT COUNT(*)::int AS n FROM favorites WHERE user_key=$1", [String(req.user.id)]);
     res.json({ total: total.rows[0].n, byStage: byStage.rows, recent: recent.rows, favorites: favorites.rows[0].n, demo: process.env.DATA_SOURCE_MODE === "demo" });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -68,17 +120,17 @@ app.get("/api/projects/:id", async (req, res) => {
   try {
     const r = await query("SELECT * FROM projects WHERE id=$1", [req.params.id]);
     if (!r.rowCount) return res.status(404).json({ error: "현장을 찾을 수 없습니다." });
-    const f = await query("SELECT id FROM favorites WHERE project_id=$1 AND user_key='admin'", [req.params.id]);
-    const s = await query("SELECT status,note FROM sales_pipeline WHERE project_id=$1 AND user_key='admin'", [req.params.id]);
+    const f = await query("SELECT id FROM favorites WHERE project_id=$1 AND user_key=$2", [req.params.id, String(req.user.id)]);
+    const s = await query("SELECT status,note FROM sales_pipeline WHERE project_id=$1 AND user_key=$2", [req.params.id, String(req.user.id)]);
     res.json({ ...r.rows[0], favorite: !!f.rowCount, pipeline: s.rows[0] || { status: "NEW", note: "" } });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 app.post("/api/projects/:id/favorite", async (req, res) => {
   try {
-    const exists = await query("SELECT id FROM favorites WHERE project_id=$1 AND user_key='admin'", [req.params.id]);
-    if (exists.rowCount) await query("DELETE FROM favorites WHERE project_id=$1 AND user_key='admin'", [req.params.id]);
-    else await query("INSERT INTO favorites(project_id,user_key) VALUES($1,'admin') ON CONFLICT DO NOTHING", [req.params.id]);
+    const exists = await query("SELECT id FROM favorites WHERE project_id=$1 AND user_key=$2", [req.params.id, String(req.user.id)]);
+    if (exists.rowCount) await query("DELETE FROM favorites WHERE project_id=$1 AND user_key=$2", [req.params.id, String(req.user.id)]);
+    else await query("INSERT INTO favorites(project_id,user_key) VALUES($1,$2) ON CONFLICT DO NOTHING", [req.params.id, String(req.user.id)]);
     res.json({ favorite: !exists.rowCount });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -87,8 +139,8 @@ app.put("/api/projects/:id/pipeline", async (req, res) => {
   try {
     const status = String(req.body.status || "NEW").slice(0, 30);
     const note = String(req.body.note || "").slice(0, 2000);
-    await query(`INSERT INTO sales_pipeline(project_id,user_key,status,note) VALUES($1,'admin',$2,$3)
-      ON CONFLICT(project_id,user_key) DO UPDATE SET status=EXCLUDED.status,note=EXCLUDED.note,updated_at=NOW()`, [req.params.id, status, note]);
+    await query(`INSERT INTO sales_pipeline(project_id,user_key,status,note) VALUES($1,$2,$3,$4)
+      ON CONFLICT(project_id,user_key) DO UPDATE SET status=EXCLUDED.status,note=EXCLUDED.note,updated_at=NOW()`, [req.params.id, String(req.user.id), status, note]);
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -105,7 +157,7 @@ app.get("/api/recommendations", async (req, res) => {
 
 app.get("/api/favorites", async (req, res) => {
   try {
-    const r = await query(`SELECT p.* FROM projects p JOIN favorites f ON f.project_id=p.id WHERE f.user_key='admin' ORDER BY f.created_at DESC`);
+    const r = await query(`SELECT p.* FROM projects p JOIN favorites f ON f.project_id=p.id WHERE f.user_key=$1 ORDER BY f.created_at DESC`, [String(req.user.id)]);
     res.json({ rows: r.rows });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -121,7 +173,7 @@ app.get("/api/export.csv", async (req, res) => {
   } catch (e) { res.status(500).send(e.message); }
 });
 
-app.post("/api/ingest/projects", requireAdmin, async (req, res) => {
+app.post("/api/ingest/projects", requireAdminRole, requireAdmin, async (req, res) => {
   const source = String(req.body.source || "external").slice(0, 200);
   const projects = Array.isArray(req.body.projects) ? req.body.projects.slice(0, 5000) : [];
   let inserted = 0;
@@ -174,17 +226,15 @@ app.post("/api/admin/demo-seed", requireAdmin, async (req,res) => {
 });
 
 app.get("/login", (req,res)=>res.sendFile(path.join(__dirname,"..","public","login.html")));
-app.post("/api/login", (req,res)=>{
-  const email=String(req.body.email||""), password=String(req.body.password||"");
-  if (!process.env.ADMIN_EMAIL || !process.env.ADMIN_PASSWORD || !safeEqual(email,process.env.ADMIN_EMAIL) || !safeEqual(password,process.env.ADMIN_PASSWORD))
-    return res.status(401).json({error:"로그인 정보를 확인해 주세요."});
-  // MVP UI gate only. Replace with secure server-side sessions before public commercial launch.
-  res.cookie("bs_admin", crypto.createHmac("sha256",process.env.SESSION_SECRET||"dev-only").update(email).digest("hex"), {httpOnly:true,sameSite:"lax",secure:process.env.NODE_ENV==="production",maxAge:8*60*60*1000});
-  res.json({ok:true});
-});
-
 async function start() {
   await initDb();
+  if (process.env.ADMIN_EMAIL && process.env.ADMIN_PASSWORD) {
+    const email=String(process.env.ADMIN_EMAIL).trim().toLowerCase();
+    const hash=await bcrypt.hash(String(process.env.ADMIN_PASSWORD),12);
+    await query(`INSERT INTO users(email,password_hash,company_name,contact_name,role,status,approved_at)
+      VALUES($1,$2,'BUILD SIGNAL 운영팀','관리자','admin','approved',NOW())
+      ON CONFLICT(email) DO UPDATE SET password_hash=EXCLUDED.password_hash,role='admin',status='approved'`,[email,hash]);
+  }
   const port = process.env.PORT || 10000;
   app.listen(port, () => console.log(`BUILD SIGNAL listening on ${port}`));
 }
