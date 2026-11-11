@@ -19,4 +19,15 @@ function showPage(page){currentPage=page;document.querySelectorAll(".page").forE
 document.querySelectorAll("[data-page],[data-go]").forEach(a=>a.addEventListener("click",e=>{e.preventDefault();const p=a.dataset.page||a.dataset.go;history.replaceState(null,"","#"+p);showPage(p);}));
 $("searchBtn").onclick=search;$("recommendBtn").onclick=recommendations;$("closeModal").onclick=()=>$("modal").classList.add("hidden");$("modal").onclick=e=>{if(e.target===$("modal"))$("modal").classList.add("hidden");};
 $("q").addEventListener("keydown",e=>{if(e.key==="Enter")search();});
-showPage(location.hash.slice(1)||"dashboard");
+(async()=>{
+  try {
+    const me=await api('/api/me');
+    const actions=document.querySelector('.top-actions');
+    if(actions){
+      const who=document.createElement('span');who.className='pill';who.textContent=me.user.company_name||me.user.email;actions.prepend(who);
+      if(me.user.role==='admin'){const a=document.createElement('a');a.className='button light';a.href='/admin.html';a.textContent='회원관리';actions.append(a);}
+      const out=document.createElement('button');out.className='button light';out.textContent='로그아웃';out.onclick=async()=>{await fetch('/api/logout',{method:'POST'});location.href='/login.html';};actions.append(out);
+    }
+    showPage(location.hash.slice(1)||'dashboard');
+  } catch(e) { location.replace('/login.html'); }
+})();
