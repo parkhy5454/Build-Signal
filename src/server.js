@@ -10,6 +10,8 @@ const { query, initDb } = require("./db");
 const { profiles, scoreProject } = require("./scoring");
 
 const app = express();
+// Render terminates HTTPS at its proxy; trust the proxy so secure session cookies are issued.
+app.set("trust proxy", 1);
 app.use(helmet({ contentSecurityPolicy: false }));
 app.use(express.json({ limit: "2mb" }));
 app.use(express.urlencoded({ extended: false }));
@@ -17,7 +19,7 @@ app.use(session({
   store: new PgSession({ conString: process.env.DATABASE_URL, createTableIfMissing: true, tableName: 'user_sessions' }),
   secret: process.env.SESSION_SECRET || 'development-only-change-this-secret',
   resave: false, saveUninitialized: false,
-  cookie: { httpOnly: true, sameSite: 'lax', secure: process.env.NODE_ENV === 'production', maxAge: 8 * 60 * 60 * 1000 }
+  cookie: { httpOnly: true, sameSite: 'lax', secure: 'auto', maxAge: 8 * 60 * 60 * 1000 }
 }));
 app.use(express.static(path.join(__dirname, "..", "public")));
 
@@ -69,8 +71,15 @@ app.post('/api/login', async (req,res)=>{
     if(!r.rowCount || !(await bcrypt.compare(password,r.rows[0].password_hash))) return res.status(401).json({error:'이메일 또는 비밀번호를 확인해 주세요.'});
     const user=r.rows[0];
     if(user.status!=='approved') return res.status(403).json({error:'가입 승인 대기 중입니다. 관리자 승인 후 이용할 수 있습니다.'});
-    req.session.userId=user.id;
-    res.json({ok:true,user:{email:user.email,role:user.role,contactName:user.contact_name}});
+    // Regenerate the session at login and wait until PostgreSQL confirms persistence.
+    req.session.regenerate((regenerateError) => {
+      if (regenerateError) return res.status(500).json({error:'로그인 세션을 생성하지 못했습니다.'});
+      req.session.userId = user.id;
+      req.session.save((saveError) => {
+        if (saveError) return res.status(500).json({error:'로그인 세션을 저장하지 못했습니다.'});
+        res.json({ok:true,user:{email:user.email,role:user.role,contactName:user.contact_name}});
+      });
+    });
   } catch(e){res.status(500).json({error:'로그인 처리 중 오류가 발생했습니다.'});}
 });
 app.post('/api/logout',(req,res)=>req.session.destroy(()=>{res.clearCookie('connect.sid');res.json({ok:true});}));
