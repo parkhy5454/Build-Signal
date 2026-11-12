@@ -1079,14 +1079,32 @@ app.put("/api/projects/:id/pipeline", async (req, res) => {
 });
 
 
+
+app.post('/api/permits/leads/:id/pipeline',loadUser,async(req,res)=>{
+ if(!/^\d+$/.test(req.params.id))return res.status(400).json({error:'잘못된 현장 ID'});
+ const status=String(req.body?.status||'NEW');
+ if(!['NEW','CONTACTED','QUALIFIED','PROPOSAL','WON','LOST'].includes(status))
+  return res.status(400).json({error:'지원하지 않는 영업 상태입니다.'});
+ const note=String(req.body?.note||'').slice(0,1000);
+ try{
+  const p=await query("SELECT id FROM projects WHERE id=$1 AND source='arch_hub_permit'",[req.params.id]);
+  if(!p.rows.length)return res.status(404).json({error:'건축허가 현장을 찾을 수 없습니다.'});
+  await query(`INSERT INTO sales_pipeline(project_id,user_key,status,note) VALUES($1,$2,$3,$4)
+   ON CONFLICT(project_id,user_key) DO UPDATE SET status=EXCLUDED.status,note=EXCLUDED.note,updated_at=NOW()`,
+   [req.params.id,String(req.user.id),status,note]);
+  res.json({ok:true,projectId:Number(req.params.id),status});
+ }catch(e){res.status(500).json({error:'영업 대상 등록 실패'});}
+});
+
 // Early-stage ArchHUB permit lead ranking: transparent heuristic, not a sales forecast.
 app.get('/api/permits/leads',async(req,res)=>{
  try{
   const profile=profiles[req.query.profile]?req.query.profile:'automation';
   const limit=Math.min(100,Math.max(1,Number.parseInt(req.query.limit,10)||30));
   const rows=await query(`SELECT p.*,
-   (SELECT COUNT(*)::int FROM project_contacts c WHERE c.project_id=p.id) AS contact_count
-   FROM projects p WHERE p.source='arch_hub_permit' ORDER BY p.updated_at DESC LIMIT 2000`);
+   (SELECT COUNT(*)::int FROM project_contacts c WHERE c.project_id=p.id) AS contact_count,
+   (SELECT sp.status FROM sales_pipeline sp WHERE sp.project_id=p.id AND sp.user_key=$1) AS pipeline_status
+   FROM projects p WHERE p.source='arch_hub_permit' ORDER BY p.updated_at DESC LIMIT 2000`,[String(req.user.id)]);
   const now=Date.now();
   const ranked=rows.rows.map(p=>{
    const base=scoreProject(p,profile);
@@ -1102,7 +1120,7 @@ app.get('/api/permits/leads',async(req,res)=>{
    if(Number(p.contact_count)>0)reasons.push('연락처 등록');
    return {id:p.id,name:p.name,address:p.address,region:p.region,buildingType:p.building_type,
     stage:p.stage,permitDate:p.permit_date,areaSqm:p.area_sqm,owner:p.owner,
-    contactCount:p.contact_count,score,reasons};
+    contactCount:p.contact_count,pipelineStatus:p.pipeline_status,score,reasons};
   }).sort((a,b)=>b.score-a.score||(new Date(b.permitDate||0)-new Date(a.permitDate||0))).slice(0,limit);
   res.json({profile:profiles[profile].label,rows:ranked,scanned:rows.rows.length,
    note:'최근 갱신 2,000건 내 휴리스틱 순위입니다. 실제 수주 가능성이나 전국 전체 현장 순위를 보장하지 않습니다.'});
