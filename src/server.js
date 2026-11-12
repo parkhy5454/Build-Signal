@@ -1156,6 +1156,30 @@ app.patch('/api/permits/leads/:id/followup',loadUser,async(req,res)=>{
 
 
 
+
+app.get('/api/permits/my-workload',loadUser,async(req,res)=>{
+ try{
+  const userKey=String(req.user.id);
+  const base="FROM sales_pipeline sp JOIN projects p ON p.id=sp.project_id WHERE sp.user_key=$1 AND p.source='arch_hub_permit'";
+  const totals=await query(`SELECT COUNT(*)::int AS "assignedLeads",
+   COUNT(*) FILTER (WHERE sp.status NOT IN ('WON','LOST'))::int AS "activeLeads",
+   COUNT(*) FILTER (WHERE sp.status='WON')::int AS won,
+   COUNT(*) FILTER (WHERE sp.status='LOST')::int AS lost,
+   COUNT(*) FILTER (WHERE sp.priority='HIGH' AND sp.status NOT IN ('WON','LOST'))::int AS "highPriorityActive",
+   COUNT(*) FILTER (WHERE sp.status NOT IN ('WON','LOST') AND sp.next_contact_date IS NULL)::int AS unscheduled,
+   COUNT(*) FILTER (WHERE sp.status NOT IN ('WON','LOST') AND sp.next_contact_date<(NOW() AT TIME ZONE 'Asia/Seoul')::date)::int AS overdue,
+   COUNT(*) FILTER (WHERE sp.status NOT IN ('WON','LOST') AND sp.next_contact_date=(NOW() AT TIME ZONE 'Asia/Seoul')::date)::int AS today
+   ${base}`,[userKey]);
+  const activity=await query(`SELECT COUNT(*) FILTER (WHERE a.created_at>=NOW()-INTERVAL '7 days')::int AS "last7Days",
+   COUNT(*) FILTER (WHERE a.created_at>=NOW()-INTERVAL '30 days')::int AS "last30Days",
+   COUNT(DISTINCT a.project_id) FILTER (WHERE a.created_at>=NOW()-INTERVAL '30 days')::int AS "touchedProjects30Days"
+   FROM sales_activities a JOIN projects p ON p.id=a.project_id
+   WHERE a.user_key=$1 AND p.source='arch_hub_permit'`,[userKey]);
+  res.json({summary:totals.rows[0],activity:activity.rows[0],timezone:'Asia/Seoul',
+   note:'로그인한 사용자 본인의 영업 대상 및 활동만 집계합니다. 배정 현장 수는 영업 관리에 등록한 현장 수이며, 조직 전체 담당자 비교가 아닙니다.'});
+ }catch(e){res.status(500).json({error:'담당자 영업 업무 현황 조회 실패'});}
+});
+
 app.get('/api/permits/followup-command-center',loadUser,async(req,res)=>{
  try{
   const userKey=String(req.user.id);
