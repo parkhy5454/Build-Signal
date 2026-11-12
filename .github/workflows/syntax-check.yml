@@ -4,6 +4,7 @@ on:
     branches:
       - 'feature/group-link-monitoring'
       - 'feature/stage3-contact-visibility'
+      - 'feature/admin-integration-latest'
   pull_request:
 jobs:
   syntax:
