@@ -33,6 +33,16 @@ async function initDb() {
       approved_at TIMESTAMPTZ
     );
     CREATE INDEX IF NOT EXISTS idx_users_status ON users(status);
+    CREATE TABLE IF NOT EXISTS permit_region_queues (
+      id BIGSERIAL PRIMARY KEY,
+      label TEXT NOT NULL,
+      query_text TEXT NOT NULL,
+      regions JSONB NOT NULL,
+      status TEXT NOT NULL DEFAULT 'prepared',
+      next_batch INTEGER NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
     CREATE TABLE IF NOT EXISTS permit_legal_dong_codes (
       code CHAR(10) PRIMARY KEY,
       name TEXT NOT NULL,
