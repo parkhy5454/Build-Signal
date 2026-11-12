@@ -2,10 +2,17 @@ const stageLabel={PERMIT:"인허가",STARTED:"착공",COMPLETED:"준공",BID:"�
 const $=id=>document.getElementById(id);
 let currentPage="dashboard",searchPage=1,searchTotalPages=1;
 function esc(s){return String(s??"-").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
+function stageSearch(value){return ({인허가:"PERMIT",허가:"PERMIT",착공:"STARTED",준공:"COMPLETED",사용승인:"COMPLETED",입찰:"BID"})[String(value).trim()]||"";}
+function emptyProjectSearch(d){
+ const counts=d.coverage||{},stage=d.selectedStage;
+ const message=stage&&counts[stage]===0?`${stageLabel[stage]} 단계로 저장된 현장이 아직 없습니다.`:'선택한 검색 조건에 맞는 현장이 없습니다. 지역·기간·연락처 조건을 확인해 주세요.';
+ const coverage=d.coverage?'현재 저장 현황: '+Object.entries(stageLabel).map(([key,label])=>label+' '+fmt(counts[key])+'건').join(' · '):'';
+ return `<div class="panel"><p>${esc(message)}</p><p>${esc(coverage)}</p><p>나라장터 입찰공고 수집만으로 인허가·착공·준공 현장이 확보되지는 않습니다. 인허가·착공은 건축HUB 수집 결과가 필요하며, 준공은 사용승인 자료 연동이 필요합니다.</p></div>`;
+}
 function fmt(n){return Number(n||0).toLocaleString("ko-KR");}
 function card(p,score){
  const badges=[p.has_phone?'<span class="signal-tag success">☎ 전화 확보</span>':'',p.has_email?'<span class="signal-tag success">✉ 이메일 확보</span>':'',p.contact_count>0?`<span class="signal-tag">${fmt(p.contact_count)}개 연락처</span>`:''].filter(Boolean).join('');
- return `<article class="project-card"><div class="project-main"><div class="project-topline"><span class="tag ${p.stage==="STARTED"?"green":""}">${stageLabel[p.stage]||"확인 필요"}</span><span class="project-source">${esc(p.source==='g2b_bid'?'나라장터 실제 공고':p.source==='demo'?'데모 데이터':p.source||'')}</span></div><h4>${esc(p.name)}</h4><p>${esc(p.address||"현장 주소 확인 중")}</p><div class="meta"><span>발주처: ${esc(p.owner||"확인 중")}</span><span>공종: ${esc(p.building_type||"미확인")}</span><span>${esc(p.region||"")}</span></div><div class="signal-tags">${badges||'<span class="signal-tag muted-tag">연락처 확인 중</span>'}</div></div><div class="card-actions">${score!==undefined?`<span class="score">${score}점</span>`:""}<button class="button primary" onclick="detail(${Number(p.id)})">상세·연락처 보기</button></div></article>`;
+ return `<article class="project-card"><div class="project-main"><div class="project-topline"><span class="tag ${p.stage==="STARTED"?"green":""}">${stageLabel[p.stage]||"확인 필요"}</span><span class="project-source">${esc(p.source==='g2b_bid'?'나라장터 실제 공고':p.source==='demo'?'데모 데이터':p.source==='arch_hub_permit'?'건축HUB 인허가':p.source||'')}</span></div><h4>${esc(p.name)}</h4><p>${esc(p.address||"현장 주소 확인 중")}</p><div class="meta"><span>발주처: ${esc(p.owner||"확인 중")}</span><span>공종: ${esc(p.building_type||"미확인")}</span><span>${esc(p.region||"")}</span></div><div class="signal-tags">${badges||'<span class="signal-tag muted-tag">연락처 확인 중</span>'}</div></div><div class="card-actions">${score!==undefined?`<span class="score">${score}점</span>`:""}<button class="button primary" onclick="detail(${Number(p.id)})">상세·연락처 보기</button></div></article>`;
 }
 async function api(url,opts){const r=await fetch(url,opts);const d=await r.json();if(!r.ok)throw new Error(d.error||"요청에 실패했습니다.");return d;}
 async function contactSummary(){
@@ -28,7 +35,7 @@ async function search(page=1){
   const d=await api("/api/projects?"+params);
   searchTotalPages=Math.max(1,d.pages||1);
   $("resultCount").textContent=`총 ${fmt(d.total)}건 · ${d.page}/${searchTotalPages} 페이지`;
-  $("projectResults").innerHTML=d.rows.length?d.rows.map(p=>card(p)).join(""):'<div class="panel">검색 결과가 없습니다.</div>';
+  $("projectResults").innerHTML=d.rows.length?d.rows.map(p=>card(p)).join(""):emptyProjectSearch(d);
   $("pageInfo").textContent=`${d.page} / ${searchTotalPages}`;
   $("prevPage").disabled=searchPage<=1;$("nextPage").disabled=searchPage>=searchTotalPages;
  }catch(e){$("projectResults").innerHTML=`<div class="notice">${esc(e.message)}</div>`;}
@@ -61,6 +68,12 @@ window.detail=async id=>{
 
 let groupPage=1,groupPages=1;
 async function groups(page=1){
+ const stage=stageSearch($('groupQ').value);
+ if(stage){
+  $('q').value='';$('stage').value=stage;$('region').value='';$('type').value='';$('contactFilter').value='';$('searchPeriod').value='';
+  $('searchFromWrap').hidden=true;$('searchToWrap').hidden=true;
+  history.replaceState(null,'','#projects');showPage('projects');return;
+ }
  groupPage=Math.max(1,page);
  const params=new URLSearchParams({q:$('groupQ').value,region:$('groupRegion').value,trade:$('groupTrade').value,page:String(groupPage)});
  try{
@@ -96,6 +109,7 @@ function showPage(page){currentPage=page;document.querySelectorAll(".page").forE
 document.querySelectorAll("[data-search-tab]").forEach(btn=>btn.addEventListener("click",()=>{history.replaceState(null,"","#"+btn.dataset.searchTab);showPage(btn.dataset.searchTab);}));
 document.querySelectorAll("[data-page],[data-go]").forEach(a=>a.addEventListener("click",e=>{e.preventDefault();const p=a.dataset.page||a.dataset.go;history.replaceState(null,"","#"+p);showPage(p);}));
 $('groupSearchBtn').onclick=()=>groups(1);
+$('groupQ').addEventListener('keydown',e=>{if(e.key==='Enter')groups(1);});
 $('groupPrev').onclick=()=>{if(groupPage>1)groups(groupPage-1);};
 $('groupNext').onclick=()=>{if(groupPage<groupPages)groups(groupPage+1);};
 $("searchPeriod").onchange=()=>{const custom=$("searchPeriod").value==="custom";$("searchFromWrap").hidden=!custom;$("searchToWrap").hidden=!custom;search(1);};

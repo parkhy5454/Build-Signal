@@ -947,14 +947,18 @@ app.get("/api/projects", async (req, res) => {
     const p = Math.max(1, Number(page) || 1), l = Math.min(100, Math.max(1, Number(limit) || 30));
     const params = [], where = [];
     function add(v, sql) { where.push(sql.replace(/\?/g, () => { params.push(v); return `$${params.length}`; })); }
-    const keyword = String(q).trim().slice(0,120);
+    const rawKeyword = String(q).trim().slice(0,120);
+    const keywordStage = ({인허가:"PERMIT",허가:"PERMIT",착공:"STARTED",준공:"COMPLETED",사용승인:"COMPLETED",입찰:"BID"})[rawKeyword];
+    const selectedStage = String(stage || keywordStage || "");
+    if(selectedStage && !STAGES.includes(selectedStage))return res.status(400).json({error:"잘못된 진행 단계입니다."});
+    const keyword = keywordStage ? "" : rawKeyword;
     if (keyword) add(`%${keyword}%`, "(p.name ILIKE ? OR p.address ILIKE ? OR p.owner ILIKE ? OR p.designer ILIKE ? OR p.contractor ILIKE ? OR EXISTS (SELECT 1 FROM project_contacts pc WHERE pc.project_id=p.id AND (pc.organization ILIKE ? OR pc.person_name ILIKE ?)))");
     if (region) add(`%${String(region).slice(0,60)}%`, "p.region ILIKE ?");
-    if (stage) add(String(stage).slice(0,30), "p.stage = ?");
+    if (selectedStage) add(selectedStage, "p.stage = ?");
     if (type) add(`%${String(type).slice(0,80)}%`, "p.building_type ILIKE ?");
     if (contact === 'any') where.push("EXISTS (SELECT 1 FROM project_contacts pc WHERE pc.project_id=p.id)");
     if (['client','designer','supervisor','contractor'].includes(contact)) add(contact, "EXISTS (SELECT 1 FROM project_contacts pc WHERE pc.project_id=p.id AND pc.role=?)");
-    const dateColumn = dateField === "collected" ? "p.created_at::date" : "CASE WHEN p.stage = 'PERMIT' THEN p.permit_date WHEN p.stage = 'STARTED' THEN p.start_date WHEN p.stage = 'BID' THEN p.source_updated_at ELSE COALESCE(p.permit_date,p.start_date,p.source_updated_at) END";
+    const dateColumn = dateField === "collected" ? "p.created_at::date" : "CASE WHEN p.stage = 'PERMIT' THEN p.permit_date WHEN p.stage = 'STARTED' THEN p.start_date WHEN p.stage = 'BID' THEN p.source_updated_at WHEN p.stage = 'COMPLETED' THEN p.completion_date ELSE COALESCE(p.permit_date,p.start_date,p.source_updated_at) END";
     for (const [value,op] of [[from,">="],[to,"<="]]) {
       if (!value) continue;
       if (!/^\d{4}-\d{2}-\d{2}$/.test(String(value)) || !Number.isFinite(Date.parse(String(value)))) return res.status(400).json({error:"날짜 형식은 YYYY-MM-DD이어야 합니다."});
@@ -971,7 +975,13 @@ app.get("/api/projects", async (req, res) => {
       ORDER BY CASE WHEN $${params.length+1}::text <> '' AND p.name ILIKE $${params.length+2} THEN 0 ELSE 1 END,
         p.updated_at DESC LIMIT $${params.length+3} OFFSET $${params.length+4}`,
       [...params, keyword, `${keyword}%`, l, (p-1)*l]);
-    res.json({rows:rows.rows,total:count.rows[0].n,page:p,pages:Math.ceil(count.rows[0].n/l)});
+    let coverage=null;
+    if(!count.rows[0].n){
+      const counts=await query("SELECT stage,COUNT(*)::int AS n FROM projects GROUP BY stage");
+      coverage=Object.fromEntries(STAGES.map(key=>[key,0]));
+      for(const row of counts.rows)coverage[row.stage]=row.n;
+    }
+    res.json({rows:rows.rows,total:count.rows[0].n,page:p,pages:Math.ceil(count.rows[0].n/l),selectedStage,coverage});
   } catch(e) {res.status(500).json({error:e.message});}
 });
 
