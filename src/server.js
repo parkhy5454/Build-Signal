@@ -460,6 +460,38 @@ app.post('/api/admin/permits/sync',loadUser,requireAdminRole,(req,res)=>{
 app.get('/api/admin/permits/history',loadUser,requireAdminRole,async(req,res)=>{try{const result=await query("SELECT id,status,job_data,created_at,updated_at FROM permit_ingest_jobs ORDER BY id DESC LIMIT 30");res.json({jobs:result.rows});}catch(e){res.status(500).json({error:e.message});}});
 app.get('/api/admin/permits/progress',loadUser,requireAdminRole,(req,res)=>res.json({job:permitJob}));
 
+
+app.post('/api/admin/permits/recover',loadUser,requireAdminRole,async(req,res)=>{
+ if(!process.env.ARCH_HUB_SERVICE_KEY)return res.status(400).json({error:'ARCH_HUB_SERVICE_KEY 미설정'});
+ if(permitJob?.status==='running')return res.status(409).json({error:'현재 수집 작업이 진행 중입니다.'});
+ try{
+  const result=await query("SELECT id,job_data FROM permit_ingest_jobs WHERE status IN ('failed','partial') ORDER BY id DESC LIMIT 30");
+  const found=result.rows.find(row=>Array.isArray(row.job_data?.failedWindows)&&row.job_data.failedWindows.length);
+  if(!found)return res.status(404).json({error:'DB에 재수집 가능한 실패 구간이 없습니다.'});
+  const failed=found.job_data.failedWindows;
+  if(failed.length>500)return res.status(400).json({error:'실패 구간이 너무 많습니다.'});
+  const retry=failed.filter(w=>/^\d{5}$/.test(String(w.sigunguCd||''))&&/^\d{5}$/.test(String(w.bjdongCd||''))&&permitDate(w.startDate)&&permitDate(w.endDate)&&w.startDate<=w.endDate);
+  if(!retry.length)return res.status(400).json({error:'유효한 실패 구간이 없습니다.'});
+  permitJob={status:'running',received:0,inserted:0,updated:0,skipped:0,pages:0,completedWindows:0,totalWindows:retry.length,errors:[],failedWindows:[],recoveredFrom:String(found.id),startedAt:new Date().toISOString()};
+  const job=permitJob;
+  void (async()=>{
+   await savePermitJob(job);
+   for(const opts of retry){
+    const child={status:'running',received:0,inserted:0,updated:0,skipped:0,pages:0,total:0};
+    await permitSync(child,opts);
+    for(const k of ['received','inserted','updated','skipped','pages'])job[k]+=child[k];
+    job.completedWindows++;
+    if(child.status!=='completed'){job.errors.push(opts.sigunguCd+'/'+opts.bjdongCd+' '+opts.startDate+'~'+opts.endDate+': '+(child.error||'오류'));job.failedWindows.push(opts);}
+    await savePermitJob(job);
+   }
+   job.status=job.failedWindows.length?(job.failedWindows.length===retry.length?'failed':'partial'):'completed';
+   job.finishedAt=new Date().toISOString();
+   await savePermitJob(job);
+  })().catch(async e=>{job.status='failed';job.error=String(e.message).slice(0,200);job.finishedAt=new Date().toISOString();await savePermitJob(job);});
+  res.status(202).json({job,sourceJobId:String(found.id)});
+ }catch(e){res.status(500).json({error:'저장된 실패 구간 조회 실패: '+e.message});}
+});
+
 app.post('/api/admin/permits/retry',loadUser,requireAdminRole,(req,res)=>{
  if(!process.env.ARCH_HUB_SERVICE_KEY)return res.status(400).json({error:'ARCH_HUB_SERVICE_KEY 미설정'});
  if(!permitJob||permitJob.status==='running')return res.status(409).json({error:'재시도 가능한 완료 작업이 없습니다.'});
