@@ -1155,6 +1155,35 @@ app.patch('/api/permits/leads/:id/followup',loadUser,async(req,res)=>{
 
 
 
+
+app.get('/api/permits/followup-command-center',loadUser,async(req,res)=>{
+ try{
+  const userKey=String(req.user.id);
+  const base="FROM sales_pipeline sp JOIN projects p ON p.id=sp.project_id WHERE sp.user_key=$1 AND p.source='arch_hub_permit' AND sp.status NOT IN ('WON','LOST')";
+  const counts=await query(`SELECT COUNT(*)::int AS "openLeads",
+   COUNT(*) FILTER (WHERE sp.next_contact_date IS NULL)::int AS unscheduled,
+   COUNT(*) FILTER (WHERE sp.next_contact_date<(NOW() AT TIME ZONE 'Asia/Seoul')::date)::int AS overdue,
+   COUNT(*) FILTER (WHERE sp.next_contact_date=(NOW() AT TIME ZONE 'Asia/Seoul')::date)::int AS today,
+   COUNT(*) FILTER (WHERE sp.next_contact_date>(NOW() AT TIME ZONE 'Asia/Seoul')::date)::int AS upcoming
+   ${base}`,[userKey]);
+  const rows=await query(`SELECT p.id,p.name,p.region,sp.status,sp.priority,
+   sp.next_contact_date AS "nextContactDate",sp.updated_at AS "updatedAt",
+   CASE WHEN sp.next_contact_date IS NULL THEN 'UNSCHEDULED'
+    WHEN sp.next_contact_date<(NOW() AT TIME ZONE 'Asia/Seoul')::date THEN 'OVERDUE'
+    WHEN sp.next_contact_date=(NOW() AT TIME ZONE 'Asia/Seoul')::date THEN 'TODAY'
+    ELSE 'UPCOMING' END AS category,
+   CASE WHEN sp.next_contact_date IS NOT NULL AND sp.next_contact_date<(NOW() AT TIME ZONE 'Asia/Seoul')::date
+    THEN ((NOW() AT TIME ZONE 'Asia/Seoul')::date-sp.next_contact_date)::int ELSE 0 END AS "overdueDays"
+   ${base} AND (sp.next_contact_date IS NULL OR sp.next_contact_date<=(NOW() AT TIME ZONE 'Asia/Seoul')::date)
+   ORDER BY CASE WHEN sp.next_contact_date<(NOW() AT TIME ZONE 'Asia/Seoul')::date THEN 0
+    WHEN sp.next_contact_date=(NOW() AT TIME ZONE 'Asia/Seoul')::date THEN 1 ELSE 2 END,
+    CASE sp.priority WHEN 'HIGH' THEN 0 WHEN 'NORMAL' THEN 1 ELSE 2 END,
+    sp.next_contact_date ASC NULLS LAST,sp.updated_at ASC,p.id DESC LIMIT 100`,[userKey]);
+  res.json({summary:counts.rows[0],actionRequired:rows.rows,limit:100,timezone:'Asia/Seoul',
+   note:'기한 초과, 오늘 연락, 일정 미등록 현장을 포함합니다. 최대 100건을 표시하며 향후 예정은 집계에만 포함됩니다.'});
+ }catch(e){res.status(500).json({error:'영업 연락 종합 현황 조회 실패'});}
+});
+
 app.get('/api/permits/unscheduled-followups',loadUser,async(req,res)=>{
  try{
   const limit=Math.min(100,Math.max(1,Number.parseInt(req.query.limit,10)||50));
