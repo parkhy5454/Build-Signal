@@ -196,7 +196,7 @@ async function loadPermitFollowups(reset){
   const r=await fetch('/api/permits/followups?when='+encodeURIComponent(when)+'&offset='+permitFollowupOffset+'&limit=50'),d=await r.json();
   if(!r.ok)throw Error(d.error||'조회 실패');
   const q=d.summary,lines=['기한 초과 '+q.overdue+'건 / 오늘 '+q.today+'건 / 향후 '+q.upcoming+'건',''];
-  for(const p of d.rows)lines.push(String(p.nextContactDate).slice(0,10)+' / #'+p.id+' ['+p.status+'] '+p.name+' / '+(p.region||'지역 미상'));
+  for(const p of d.rows)lines.push((p.urgency==='OVERDUE'?'[기한 초과 '+p.overdueDays+'일] ':p.urgency==='TODAY'?'[오늘 연락] ':'[향후 예정] ')+String(p.nextContactDate).slice(0,10)+' / #'+p.id+' ['+p.status+'] '+p.name+' / '+(p.region||'지역 미상'));
   if(!d.rows.length)lines.push('해당 일정 없음');
   lines.push('',d.note);
   out.textContent=lines.join('\n');permitFollowupOffset+=d.rows.length;

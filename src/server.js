@@ -1147,8 +1147,12 @@ app.get('/api/permits/followups',loadUser,async(req,res)=>{
    COUNT(*) FILTER (WHERE sp.next_contact_date=(NOW() AT TIME ZONE 'Asia/Seoul')::date)::int AS today,
    COUNT(*) FILTER (WHERE sp.next_contact_date>(NOW() AT TIME ZONE 'Asia/Seoul')::date)::int AS upcoming ${base}`,[String(req.user.id)]);
   const rows=await query(`SELECT p.id,p.name,p.address,p.region,sp.status,sp.note,
-   sp.next_contact_date AS "nextContactDate",sp.updated_at AS "updatedAt"
-   ${base}${filters[status]} ORDER BY sp.next_contact_date ASC,p.id DESC LIMIT $2 OFFSET $3`,
+   sp.next_contact_date AS "nextContactDate",sp.updated_at AS "updatedAt",
+   GREATEST(0,((NOW() AT TIME ZONE 'Asia/Seoul')::date-sp.next_contact_date))::int AS "overdueDays",
+   CASE WHEN sp.next_contact_date<(NOW() AT TIME ZONE 'Asia/Seoul')::date THEN 'OVERDUE'
+    WHEN sp.next_contact_date=(NOW() AT TIME ZONE 'Asia/Seoul')::date THEN 'TODAY'
+    ELSE 'UPCOMING' END AS "urgency"
+   ${base}${filters[status]} ORDER BY CASE WHEN sp.next_contact_date<=(NOW() AT TIME ZONE 'Asia/Seoul')::date THEN 0 ELSE 1 END ASC,sp.next_contact_date ASC,p.id DESC LIMIT $2 OFFSET $3`,
    [String(req.user.id),limit,offset]);
   res.json({summary:totals.rows[0],rows:rows.rows,when:status,limit,offset,
    note:'날짜는 한국 표준시(Asia/Seoul)를 기준으로 계산합니다.'});
