@@ -1151,6 +1151,27 @@ app.patch('/api/permits/leads/:id/followup',loadUser,async(req,res)=>{
 
 
 
+
+app.get('/api/permits/sales-stage-history',loadUser,async(req,res)=>{
+ try{
+  const limit=Math.min(100,Math.max(1,Number.parseInt(req.query.limit,10)||50));
+  const offset=Math.max(0,Math.min(100000,Number.parseInt(req.query.offset,10)||0));
+  const rows=await query(`SELECT h.id,h.project_id AS "projectId",p.name AS "projectName",
+   h.from_status AS "fromStatus",h.to_status AS "toStatus",h.changed_at AS "changedAt"
+   FROM sales_stage_history h JOIN projects p ON p.id=h.project_id
+   WHERE h.user_key=$1 AND p.source='arch_hub_permit'
+   ORDER BY h.changed_at DESC,h.id DESC LIMIT $2 OFFSET $3`,
+   [String(req.user.id),limit,offset]);
+  const summary=await query(`SELECT COUNT(*)::int AS transitions,
+   COUNT(*) FILTER (WHERE h.to_status='WON' AND h.from_status IS DISTINCT FROM 'WON')::int AS "wonEntries",
+   COUNT(*) FILTER (WHERE h.to_status='PROPOSAL' AND h.from_status IS DISTINCT FROM 'PROPOSAL')::int AS "proposalEntries"
+   FROM sales_stage_history h JOIN projects p ON p.id=h.project_id
+   WHERE h.user_key=$1 AND p.source='arch_hub_permit'`,[String(req.user.id)]);
+  res.json({rows:rows.rows,summary:summary.rows[0],limit,offset,
+   note:'변경 이력 기능 배포 이후의 단계 변경만 기록합니다. 기존 영업 단계는 소급 복원되지 않습니다. 동일 현장의 재진입은 여러 번 집계됩니다.'});
+ }catch(e){res.status(500).json({error:'영업 단계 변경 이력 조회 실패'});}
+});
+
 app.get('/api/permits/sales-performance',loadUser,async(req,res)=>{
  try{
   const userKey=String(req.user.id);
