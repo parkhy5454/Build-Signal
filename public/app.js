@@ -7,7 +7,7 @@ function emptyProjectSearch(d){
  const counts=d.coverage||{},stage=d.selectedStage;
  const message=stage&&counts[stage]===0?`${stageLabel[stage]} 단계로 저장된 현장이 아직 없습니다.`:'선택한 검색 조건에 맞는 현장이 없습니다. 지역·기간·연락처 조건을 확인해 주세요.';
  const coverage=d.coverage?'현재 저장 현황: '+Object.entries(stageLabel).map(([key,label])=>label+' '+fmt(counts[key])+'건').join(' · '):'';
- return `<div class="panel"><p>${esc(message)}</p><p>${esc(coverage)}</p><p>나라장터 입찰공고 수집만으로 인허가·착공·준공 현장이 확보되지는 않습니다. 인허가·착공은 건축HUB 수집 결과가 필요하며, 준공은 사용승인 자료 연동이 필요합니다.</p></div>`;
+ return `<div class="panel"><p>${esc(message)}</p><p>${esc(coverage)}</p><p>나라장터 입찰공고 수집만으로 인허가·착공·준공 현장이 확보되지는 않습니다. 인허가·착공은 건축HUB 수집 결과가 필요하며, 준공은 국토부 자료에 사용승인일이 있는 현장을 수집한 뒤 표시됩니다.</p></div>`;
 }
 function fmt(n){return Number(n||0).toLocaleString("ko-KR");}
 function card(p,score){

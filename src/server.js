@@ -8,6 +8,7 @@ const PgSession = require("connect-pg-simple")(session);
 const bcrypt = require("bcryptjs");
 const { query, initDb } = require("./db");
 const { profiles, scoreProject } = require("./scoring");
+const { permitDate, permitLifecycle } = require("./archhub");
 
 const app = express();
 // Render terminates HTTPS at its proxy; trust the proxy so secure session cookies are issued.
@@ -356,8 +357,8 @@ app.get("/api/admin/g2b/status", loadUser, requireAdminRole, async (req,res) => 
 // Read-only building permit ingestion readiness. Never expose the API key.
 app.get('/api/admin/permits/status',loadUser,requireAdminRole,async(req,res)=>{
  try{
-  const result=await query("SELECT COUNT(*)::int AS total, MAX(updated_at) AS last_updated FROM projects WHERE source='arch_hub_permit'");
-  res.json({configured:!!process.env.ARCH_HUB_SERVICE_KEY,total:result.rows[0].total,last_updated:result.rows[0].last_updated,ingestion_enabled:false});
+  const result=await query("SELECT COUNT(*)::int AS total, MAX(updated_at) AS last_updated, COUNT(*) FILTER (WHERE stage='PERMIT')::int AS permit, COUNT(*) FILTER (WHERE stage='STARTED')::int AS started, COUNT(*) FILTER (WHERE stage='COMPLETED')::int AS completed FROM projects WHERE source='arch_hub_permit'");
+  res.json({configured:!!process.env.ARCH_HUB_SERVICE_KEY,total:result.rows[0].total,last_updated:result.rows[0].last_updated,byStage:{PERMIT:result.rows[0].permit,STARTED:result.rows[0].started,COMPLETED:result.rows[0].completed},ingestion_enabled:true});
  }catch(e){res.status(500).json({error:'건축허가 수집 상태를 확인하지 못했습니다.'});}
 });
 
@@ -402,13 +403,12 @@ async function savePermitJob(job){
  }catch(e){console.error('Permit job log:',e.message);}
 }
 
-const permitDate=v=>{const x=String(v||'');if(!/^\d{8}$/.test(x))return null;const iso=`${x.slice(0,4)}-${x.slice(4,6)}-${x.slice(6,8)}`;const d=new Date(iso+'T00:00:00Z');return Number.isFinite(d.getTime())&&d.toISOString().slice(0,10)===iso?iso:null;};
 async function permitSync(job,opts){
  try{
   const key=process.env.ARCH_HUB_SERVICE_KEY;
   for(let page=1;page<=20;page++){
    const url=new URL('https://apis.data.go.kr/1613000/ArchPmsHubService/getApBasisOulnInfo');
-   for(const [k,v] of Object.entries({serviceKey:key,_type:'json',sigunguCd:opts.sigunguCd,bjdongCd:opts.bjdongCd,startDate:opts.startDate,endDate:opts.endDate,numOfRows:'100',pageNo:String(page)}))url.searchParams.set(k,v);
+   for(const [k,v] of Object.entries({serviceKey:key,_type:'json',sigunguCd:opts.sigunguCd,bjdongCd:opts.bjdongCd,startDate:opts.startDate,endDate:opts.endDate,numOfRows:'100',pageNo:String(page)})){if(v)url.searchParams.set(k,v);}
    const response=await fetch(url,{signal:AbortSignal.timeout(20000)});
    if(!response.ok)throw Error('건축HUB HTTP 오류 '+response.status+' (페이지 '+page+')');
    const raw=await response.text();let data;
@@ -428,24 +428,26 @@ async function permitSync(job,opts){
     const id=String(item.mgmPmsrgstPk||'').trim();
     const address=String(item.platPlc||'').trim();
     if(!id||!address){job.skipped++;continue;}
-    const permit=permitDate(item.archPmsDay),started=permitDate(item.realStcnsDay);
-    const stage=started?'STARTED':permit?'PERMIT':'UNKNOWN';
+    const {permit,started,completed,stage}=permitLifecycle(item);
+    job.byStage??={PERMIT:0,STARTED:0,COMPLETED:0,UNKNOWN:0};
     const name=String(item.bldNm||'').trim()||address+' 건축인허가';
     const region=address.split(/\s+/)[0]||null;
     const area=Number(item.totArea);
-    const result=await query(`INSERT INTO projects(source,external_id,name,address,region,district,building_type,stage,permit_date,start_date,area_sqm,source_url,source_updated_at)
-      VALUES('arch_hub_permit',$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
-      ON CONFLICT(source,external_id) DO UPDATE SET name=EXCLUDED.name,address=EXCLUDED.address,region=EXCLUDED.region,district=EXCLUDED.district,building_type=EXCLUDED.building_type,stage=EXCLUDED.stage,permit_date=EXCLUDED.permit_date,start_date=EXCLUDED.start_date,area_sqm=EXCLUDED.area_sqm,source_url=EXCLUDED.source_url,source_updated_at=EXCLUDED.source_updated_at,updated_at=NOW()
-      RETURNING (xmax=0) AS inserted`,
-      [id,name.slice(0,500),address,region,address.split(/\s+/)[1]||null,String(item.mainPurpsCdNm||'').slice(0,300)||null,stage,permit,started,Number.isFinite(area)&&area>0?area:null,
+    const result=await query(`INSERT INTO projects(source,external_id,name,address,region,district,building_type,stage,permit_date,start_date,completion_date,area_sqm,source_url,source_updated_at)
+      VALUES('arch_hub_permit',$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+      ON CONFLICT(source,external_id) DO UPDATE SET name=EXCLUDED.name,address=EXCLUDED.address,region=EXCLUDED.region,district=EXCLUDED.district,building_type=EXCLUDED.building_type,stage=CASE WHEN COALESCE(EXCLUDED.completion_date,projects.completion_date) IS NOT NULL THEN 'COMPLETED' WHEN COALESCE(EXCLUDED.start_date,projects.start_date) IS NOT NULL THEN 'STARTED' WHEN COALESCE(EXCLUDED.permit_date,projects.permit_date) IS NOT NULL THEN 'PERMIT' ELSE 'UNKNOWN' END,permit_date=COALESCE(EXCLUDED.permit_date,projects.permit_date),start_date=COALESCE(EXCLUDED.start_date,projects.start_date),completion_date=COALESCE(EXCLUDED.completion_date,projects.completion_date),area_sqm=EXCLUDED.area_sqm,source_url=EXCLUDED.source_url,source_updated_at=EXCLUDED.source_updated_at,updated_at=NOW()
+      RETURNING (xmax=0) AS inserted,stage`,
+      [id,name.slice(0,500),address,region,address.split(/\s+/)[1]||null,String(item.mainPurpsCdNm||'').slice(0,300)||null,stage,permit,started,completed,Number.isFinite(area)&&area>0?area:null,
       'https://www.data.go.kr/data/15136267/openapi.do',permitDate(item.crtnDay)]);
     if(result.rows[0]?.inserted)job.inserted++;else job.updated++;
+    job.byStage[result.rows[0]?.stage||stage]++;
    }
    job.total=Number(body.totalCount)||0;
    if(!items.length||(job.total>0&&page*100>=job.total)||items.length<100)break;
-   if(page===20)throw Error('안전 제한 2000건에 도달했습니다. 더 좁은 날짜 범위로 수집하세요.');
+   if(page===20)throw Error('안전 제한 2000건에 도달했습니다. 일부 자료만 저장되었습니다. 날짜 범위를 지정하거나 분할 수집하세요.');
   }
   job.status='completed';
+  job.note=job.received===0?'조회된 원천 자료가 없습니다. 지역코드 또는 기간을 확인하세요.': '국토교통부 건축HUB 자료 저장 완료. 준공은 사용승인일 확인 기준입니다.';
  }catch(e){job.status='failed';job.error=String(e.message).slice(0,200);}
  finally{job.finishedAt=new Date().toISOString();await savePermitJob(job);}
 }
@@ -453,13 +455,16 @@ app.post('/api/admin/permits/sync',loadUser,requireAdminRole,(req,res)=>{
  if(!process.env.ARCH_HUB_SERVICE_KEY)return res.status(400).json({error:'ARCH_HUB_SERVICE_KEY 미설정'});
  if(permitJob?.status==='running')return res.status(409).json({error:'이미 수집 중입니다.'});
  const {sigunguCd,bjdongCd,startDate,endDate}=req.body||{};
+ const initialLoad=req.body?.initialLoad===true;
  if(!/^\d{5}$/.test(String(sigunguCd||''))||!/^\d{5}$/.test(String(bjdongCd||'')))return res.status(400).json({error:'시군구코드와 법정동코드는 각각 5자리여야 합니다.'});
+ if(!initialLoad){
  if(!/^\d{8}$/.test(String(startDate||''))||!/^\d{8}$/.test(String(endDate||''))||startDate>endDate)return res.status(400).json({error:'날짜는 YYYYMMDD 형식이어야 합니다.'});
  const from=Date.parse(startDate.slice(0,4)+'-'+startDate.slice(4,6)+'-'+startDate.slice(6,8));
  const to=Date.parse(endDate.slice(0,4)+'-'+endDate.slice(4,6)+'-'+endDate.slice(6,8));
  if(!permitDate(startDate)||!permitDate(endDate)||!Number.isFinite(from)||!Number.isFinite(to)||to-from>29*86400000)return res.status(400).json({error:'한 번에 최대 30일까지만 수집할 수 있습니다.'});
+ }
  permitJob={status:'running',received:0,inserted:0,updated:0,skipped:0,pages:0,total:0,startedAt:new Date().toISOString()};
- void (async()=>{await savePermitJob(permitJob);await permitSync(permitJob,{sigunguCd,bjdongCd,startDate,endDate});})();
+ void (async()=>{await savePermitJob(permitJob);await permitSync(permitJob,{sigunguCd,bjdongCd,startDate:initialLoad?undefined:startDate,endDate:initialLoad?undefined:endDate});})();
  res.status(202).json({job:permitJob});
 });
 
