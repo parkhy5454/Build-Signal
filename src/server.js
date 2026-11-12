@@ -508,6 +508,28 @@ app.get('/api/admin/project-groups/preview',loadUser,requireAdminRole,async(req,
  }catch(e){res.status(500).json({error:e.message});}
 });
 
+// Explicit admin approval: only a strict identity-key match to an existing group is accepted.
+app.post('/api/admin/project-groups/approve',loadUser,requireAdminRole,async(req,res)=>{
+ try{
+  const noticeId=Number(req.body?.notice_id),groupId=Number(req.body?.group_id);
+  if(!Number.isSafeInteger(noticeId)||noticeId<=0||!Number.isSafeInteger(groupId)||groupId<=0)
+    return res.status(400).json({error:'유효한 공고 ID와 프로젝트 ID가 필요합니다.'});
+  const p=await query('SELECT id,source,name,owner,address,region,project_group_id FROM projects WHERE id=$1',[noticeId]);
+  if(!p.rowCount)return res.status(404).json({error:'공고를 찾을 수 없습니다.'});
+  if(p.rows[0].project_group_id!==null)return res.status(409).json({error:'이미 연결된 공고입니다. 변경하지 않았습니다.'});
+  const identity=projectGroupIdentity(p.rows[0]);
+  if(!identity)return res.status(422).json({error:'엄격한 자동 매칭 기준을 충족하지 않습니다. 연결하지 않았습니다.'});
+  const updated=await query(`UPDATE projects AS p SET project_group_id=g.id
+    FROM project_groups AS g
+    WHERE p.id=$1 AND p.source='g2b_bid' AND p.project_group_id IS NULL
+      AND g.id=$2 AND g.group_key=$3
+    RETURNING p.id,p.project_group_id`,[noticeId,groupId,identity.key]);
+  if(!updated.rowCount)return res.status(409).json({error:'그룹 식별키 불일치 또는 다른 관리자가 먼저 변경했습니다. 다시 조회하세요.'});
+  console.info('Project group approved', {noticeId,groupId,adminId:req.user?.id});
+  res.json({ok:true,notice_id:noticeId,group_id:groupId});
+ }catch(e){res.status(500).json({error:e.message});}
+});
+
 app.post('/api/admin/project-groups/backfill',loadUser,requireAdminRole,async(req,res)=>{
  try{
   const limit=Math.min(500,Math.max(1,parseInt(req.body?.limit,10)||200));
