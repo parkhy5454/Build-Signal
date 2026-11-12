@@ -10,6 +10,7 @@
   <div class="brand"><div class="brand-mark">BS</div><div><b>BUILD SIGNAL</b><small>Construction Intelligence</small></div></div>
   <nav>
     <a class="active" href="#dashboard" data-page="dashboard">▦ 대시보드</a>
+    <a href="#groups" data-page="groups">▤ 통합 프로젝트</a>
     <a href="#projects" data-page="projects">⌕ 프로젝트·연락처 검색</a>
     <a href="#recommend" data-page="recommend">✦ AI 영업 추천</a>
     <a href="#favorites" data-page="favorites">☆ 관심 현장</a>
@@ -31,6 +32,19 @@
   <div class="section-head"><div><h3>최근 등록 현장</h3><p>최근 수집 또는 업데이트된 프로젝트</p></div><a href="#projects" data-go="projects">전체 보기 →</a></div>
   <div id="recent" class="project-list"></div>
   <div class="notice" id="demoNotice" hidden>ⓘ 데모 데이터가 포함되어 있습니다. 실제 공고와 구분해 확인하세요.</div>
+</section>
+<section id="groups" class="page">
+  <div class="section-head"><div><h3>통합 건설 프로젝트</h3><p>동일 발주기관·위치·사업명으로 확인된 공종별 입찰공고를 묶어 표시합니다.</p></div></div>
+  <div class="panel filters">
+    <label>프로젝트명·발주처<input id="groupQ" placeholder="프로젝트명 또는 발주처"></label>
+    <label>지역<input id="groupRegion" placeholder="예: 경기도"></label>
+    <label>공종<select id="groupTrade"><option value="">전체 공종</option><option>건축</option><option>전기</option><option>통신</option><option>소방</option><option>기계설비</option></select></label>
+    <button class="button primary" id="groupSearchBtn">검색</button>
+  </div>
+  <div class="section-head"><div><h3>프로젝트 목록</h3><p id="groupCount">검색 중...</p></div></div>
+  <div id="groupResults" class="project-list"></div>
+  <div class="pagination"><button class="button light" id="groupPrev">← 이전</button><span id="groupPageInfo">1 / 1</span><button class="button light" id="groupNext">다음 →</button></div>
+  <div class="notice">ⓘ 보수적인 자동 매칭으로 연결된 공고만 표시합니다. 원본 공고는 ‘프로젝트·연락처 검색’에서 모두 확인할 수 있습니다.</div>
 </section>
 <section id="projects" class="page">
   <div class="panel filters">
