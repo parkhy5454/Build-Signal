@@ -1,6 +1,8 @@
 const crypto=require('node:crypto');
+const {fetchGyeonggi}=require('./gyeonggi-directory');
 // Registry fields verified against each publisher's ODCloud OpenAPI manifest (2026-11-12).
 const SOURCES={
+ gyeonggi_developers:{label:'경기 부동산개발업체',region:'경기',url:'https://gris.gg.go.kr/reb/selectRealestateDevList.do',phoneProvided:true,phoneMode:'project_parties',addressFields:['사무소 소재지']},
  architects:{label:'전국 건축사사무소',url:'https://www.data.go.kr/data/15129439/standard.do',region:'전국',phoneProvided:true},
  busan_developers:{label:'부산 부동산개발업체',region:'부산',dataset:'15134260',phoneProvided:true,addressFields:['주사무소 소재지']},
  daegu_developers:{label:'대구 부동산개발업체',region:'대구',dataset:'15074138',phoneProvided:true,addressFields:['주사무소 소재지']},
@@ -13,7 +15,7 @@ function inactiveRegistration(value){return /폐업|말소|취소|정지/.test(t
 function coverageSummary(states){
  return Object.entries(SOURCES).map(([source,info])=>{
   const state=states.find(x=>x.source===source);
-  return {source,label:info.label,region:info.region,url:info.url,phoneProvided:info.phoneProvided,
+  return {source,label:info.label,region:info.region,url:info.url,phoneProvided:info.phoneProvided,phoneMode:info.phoneMode||'directory',
    status:state?.last_success_at?(state.last_error?'retained':'synced'):'pending',
    recordCount:Number(state?.record_count||0),lastSuccessAt:state?.last_success_at||null};
  });
@@ -29,7 +31,8 @@ function normalizeRecord(row,source){
  if(!SOURCES[source])throw Error('지원하지 않는 명부 출처');
  const organization=architecture?read(row,'CO_NM','사무소명'):read(row,'상호');
  const address=architecture?read(row,'LCTN_ROAD_NM','소재지도로명주소','LCTN_LOTNO_ADDR','소재지지번주소'):read(row,...SOURCES[source].addressFields);
- if(!organization||!address||organization.length>200||address.length>500)throw Error('업체명·사업장 주소 필드 누락 또는 형식 변경');
+ const officeMissingAllowed=source==='gyeonggi_developers'&&/^경기\d{6}$/.test(read(row,'등록번호'));
+ if(!organization||!address&&!officeMissingAllowed||organization.length>200||address.length>500)throw Error('업체명·사업장 주소 필드 누락 또는 형식 변경');
  const record={source,organization,name_key:nameKey(organization),address,address_key:addressKey(address),registration_status:read(row,'등록상태','상태')||null,registration_no:read(row,'부동산개발업등록번호','등록번호','신고번호')||null,
   representative:read(row,'RPRSV_NM','대표자명','대표자')||null,phone:!architecture&&(!SOURCES[source].phoneProvided||inactiveRegistration(read(row,'등록상태','상태')))?null:validPhone(read(row,'TELNO','전화번호')),data_date:architecture?read(row,'DATA_CRTR_YMD','데이터기준일자')||null:row.__directoryDate||null,source_url:SOURCES[source].url};
  record.fingerprint=digest(JSON.stringify(record));return record;
@@ -99,19 +102,20 @@ async function directoryMatches(query,evidence){
  const historic=confirmedIds.length?await query('SELECT * FROM organization_directory WHERE id=ANY($1::bigint[]) AND is_current=FALSE',[confirmedIds]):{rows:[]};
  const out=[];for(const e of evidence){for(const row of [...result.rows,...historic.rows]){const decision=choices.rows.filter(x=>String(x.evidence_id)===String(e.id)&&(String(x.directory_id)===String(row.id)||(x.directory_source===row.source&&x.directory_name_key===row.name_key&&x.directory_address_key===row.address_key&&String(x.directory_registration_no||'')===String(row.registration_no||'')))).sort((a,b)=>BigInt(a.id)>BigInt(b.id)?-1:BigInt(a.id)<BigInt(b.id)?1:0)[0];if(row.name_key!==nameKey(e.organization)&&!decision)continue;const state=matchState(e,row,decision);if(state.status==='rejected')continue;out.push({...row,evidence_id:e.id,role:e.role,match_status:state.status,match_reason:state.reason});}}return out;
 }
-function createDirectorySync({query,transaction,env=process.env,request=json}){
+function createDirectorySync({query,transaction,env=process.env,request=json,gyeonggiRequest}){
  let active=false,timer;
  async function run(){
   if(active||env.AUTO_INGEST_ENABLED==='false')return;active=true;
   try{for(const source of Object.keys(SOURCES)){
    // Keep the secret out of operational status; persist only a one-way change marker.
-   const key=source==='architects'?env.ARCHITECT_DIRECTORY_KEY:env.DEVELOPER_DIRECTORY_KEY;
+   const key=source==='architects'?env.ARCHITECT_DIRECTORY_KEY:source==='gyeonggi_developers'?'public-form-v1':env.DEVELOPER_DIRECTORY_KEY;
    const revision=digest(source+':'+(key||'public-or-unconfigured'));
    await query(`UPDATE directory_sync_state SET config_revision=$2,next_due_at=NOW(),last_error=NULL
     WHERE source=$1 AND config_revision IS DISTINCT FROM $2 AND (lease_until IS NULL OR lease_until<NOW())`,[source,revision]);
    const token=crypto.randomUUID();const claim=await query(`UPDATE directory_sync_state SET lease_token=$2,lease_until=NOW()+INTERVAL '20 minutes',last_attempt_at=NOW() WHERE source=$1 AND next_due_at<=NOW() AND (lease_until IS NULL OR lease_until<NOW()) RETURNING source`,[source,token]);if(!claim.rows.length)continue;
    try{
-    const raw=await (source==='architects'?fetchArchitects(env,request):fetchDevelopers(env,request,source));
+    const phoneNames=source==='gyeonggi_developers'?(await query('SELECT DISTINCT organization FROM project_party_evidence')).rows.map(x=>x.organization):[];
+    const raw=await (source==='gyeonggi_developers'?fetchGyeonggi({phoneNames,nameKey,request:gyeonggiRequest}):source==='architects'?fetchArchitects(env,request):fetchDevelopers(env,request,source));
     const records=[...new Map(raw.map(row=>{const r=normalizeRecord(row,source);return [r.fingerprint,r];})).values()];
     if(!records.length)throw Error('빈 명부는 반영하지 않습니다.');
     await transaction(async q=>{
@@ -120,7 +124,7 @@ function createDirectorySync({query,transaction,env=process.env,request=json}){
       SELECT source,organization,name_key,address,address_key,registration_no,representative,phone,data_date,source_url,fingerprint,registration_status FROM jsonb_to_recordset($1::jsonb) AS r(source TEXT,organization TEXT,name_key TEXT,address TEXT,address_key TEXT,registration_no TEXT,representative TEXT,phone TEXT,data_date TEXT,source_url TEXT,fingerprint TEXT,registration_status TEXT)
       ON CONFLICT(fingerprint) DO UPDATE SET last_seen_at=NOW()`,[JSON.stringify(records.slice(i,i+1000))]);
      await q('UPDATE organization_directory SET is_current=(fingerprint=ANY($2::text[])) WHERE source=$1',[source,records.map(x=>x.fingerprint)]);
-     await q(`UPDATE directory_sync_state SET last_success_at=NOW(),last_error=NULL,record_count=$3,lease_token=NULL,lease_until=NULL,next_due_at=NOW()+INTERVAL '7 days' WHERE source=$1 AND lease_token=$2`,[source,token,records.length]);
+     await q(`UPDATE directory_sync_state SET last_success_at=NOW(),last_error=NULL,record_count=$3,lease_token=NULL,lease_until=NULL,next_due_at=NOW()+CASE WHEN source='gyeonggi_developers' THEN INTERVAL '1 day' ELSE INTERVAL '7 days' END WHERE source=$1 AND lease_token=$2`,[source,token,records.length]);
     });
    }catch(e){await query(`UPDATE directory_sync_state SET last_error=$3,lease_token=NULL,lease_until=NULL,next_due_at=NOW()+INTERVAL '2 hours' WHERE source=$1 AND lease_token=$2`,[source,token,String(e.message).replaceAll(env.ARCHITECT_DIRECTORY_KEY||'__no_key__','[redacted]').replaceAll(env.DEVELOPER_DIRECTORY_KEY||'__no_key__','[redacted]').slice(0,250)]);}
   }}catch(e){console.error('Directory sync failed:',e.message);}finally{active=false;}
