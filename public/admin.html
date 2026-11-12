@@ -542,8 +542,9 @@ document.getElementById('permitRegionalOpportunitiesLoad').addEventListener('cli
   const regionSelect=document.getElementById('permitRegionalLeadRegion');regionSelect.replaceChildren();
   const placeholder=document.createElement('option');placeholder.value='';placeholder.textContent='지역 선택';regionSelect.appendChild(placeholder);
   for(const x of regions){const option=document.createElement('option');option.value=x.region;option.textContent=x.region+' (신규 '+x.newSites+'건)';regionSelect.appendChild(option);}
-  const lines=['[지역별 건축허가 현장 분석 / 최근 '+d.days+'일 / 정렬: '+document.getElementById('permitRegionalOpportunitiesSort').selectedOptions[0].textContent+']','지역 | 전체 현장 | 기간 내 신규 | 기간 내 갱신 | 현재 인허가 단계 | 기간 내 신규 인허가 단계'];
-  for(const x of regions)lines.push(x.region+' | '+x.totalSites+' | '+x.newSites+' | '+x.updatedSites+' | '+x.permitStage+' | '+x.newPermitStage);
+  const totalNew=regions.reduce((n,x)=>n+Number(x.newSites||0),0),totalPermit=regions.reduce((n,x)=>n+Number(x.newPermitStage||0),0);
+  const lines=['[지역별 건축허가 현장 분석 / 최근 '+d.days+'일 / 정렬: '+document.getElementById('permitRegionalOpportunitiesSort').selectedOptions[0].textContent+']','분석 지역 '+regions.length+'개 / 기간 내 신규 '+totalNew+'건 / 신규 인허가 단계 '+totalPermit+'건','※ 아래 순위는 선택한 정렬 기준의 표시 순서이며, 실제 수주 가능성 순위가 아닙니다.','순위 | 지역 | 전체 현장 | 기간 내 신규 | 신규 비중 | 기간 내 갱신 | 현재 인허가 단계 | 기간 내 신규 인허가 단계'];
+  for(const [index,x] of regions.entries()){const share=totalNew?((Number(x.newSites||0)/totalNew)*100).toFixed(1)+'%':'-';lines.push((index+1)+' | '+x.region+' | '+x.totalSites+' | '+x.newSites+' | '+share+' | '+x.updatedSites+' | '+x.permitStage+' | '+x.newPermitStage);}
   if(!regions.length)lines.push('건축허가 현장 데이터가 없습니다.');
   lines.push('',d.note);out.textContent=lines.join('\n');
  }catch(e){out.textContent=e.message;}
