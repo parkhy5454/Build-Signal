@@ -555,9 +555,9 @@ app.post('/api/admin/permits/region-queues/:id/run-next',loadUser,requireAdminRo
  },30000);
  heartbeat.unref?.();
  void (async()=>{
+  let currentRegion=null;
   try{
    await savePermitJob(job);
-   let currentRegion=null;
    for(let regionIndex=queue.next_region||0;regionIndex<regions.length;regionIndex++){
     const region=regions[regionIndex];
     currentRegion=region;
@@ -577,7 +577,7 @@ app.post('/api/admin/permits/region-queues/:id/run-next',loadUser,requireAdminRo
    job.status='completed';
   }catch(e){
    job.status='failed';job.error=String(e.message).slice(0,500);
-   await query("UPDATE permit_region_queues SET status='failed',run_token=NULL,updated_at=NOW() WHERE id=$1 AND next_batch=$2 AND status='running' AND run_token=$3",[queue.id,queue.next_batch,runToken]).catch(()=>{});
+   await query("UPDATE permit_region_queues SET status='failed',last_error=$4,failed_region=$5,failed_at=NOW(),run_token=NULL,updated_at=NOW() WHERE id=$1 AND next_batch=$2 AND status='running' AND run_token=$3",[queue.id,queue.next_batch,runToken,job.error,typeof currentRegion==='object'&&currentRegion?String(currentRegion.name||currentRegion.sigunguCd+'-'+currentRegion.bjdongCd).slice(0,200):null]).catch(()=>{});
   }finally{clearInterval(heartbeat);job.finishedAt=new Date().toISOString();await savePermitJob(job).catch(()=>{});}
  })();
  res.status(202).json({job});
