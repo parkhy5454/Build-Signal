@@ -79,6 +79,23 @@ async function initDb() {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       UNIQUE(project_id, user_key)
     );
+    CREATE TABLE IF NOT EXISTS project_contacts (
+      id BIGSERIAL PRIMARY KEY,
+      project_id BIGINT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      role TEXT NOT NULL CHECK (role IN ('client','designer','supervisor','contractor')),
+      organization TEXT NOT NULL,
+      department TEXT,
+      person_name TEXT,
+      phone TEXT,
+      email TEXT,
+      source TEXT NOT NULL,
+      source_url TEXT,
+      verified_at TIMESTAMPTZ,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE(project_id,role,organization,source)
+    );
+    CREATE INDEX IF NOT EXISTS idx_project_contacts_project ON project_contacts(project_id);
+    CREATE INDEX IF NOT EXISTS idx_project_contacts_role ON project_contacts(role);
     CREATE TABLE IF NOT EXISTS ingest_logs (
       id BIGSERIAL PRIMARY KEY,
       source TEXT NOT NULL,

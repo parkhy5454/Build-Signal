@@ -237,11 +237,28 @@ async function g2bRunJob(job) {
       const district = location && location.split(/\s+/).length > 1 ? location.split(/\s+/).slice(1).join(" ") : null;
       const vals = ["g2b_bid", externalId, title, location, region, district, classifyBid(title), "BID",
         noticeDate, null, closeDate, null, null, null, estimated ? Number(estimated.replace(/,/g,"")) || null : null,
-        demandAgency || agency, null, null, agency, sourceUrl, noticeDate];
+        demandAgency || agency, null, null, null, sourceUrl, noticeDate];
       const r = await query(`INSERT INTO projects(source,external_id,name,address,region,district,building_type,stage,permit_date,start_date,completion_date,floors_above,floors_below,area_sqm,estimated_cost,owner,designer,supervisor,contractor,source_url,source_updated_at)
         VALUES(${vals.map((_,i)=>`$${i+1}`).join(",")})
-        ON CONFLICT(source,external_id) DO UPDATE SET name=EXCLUDED.name,address=EXCLUDED.address,region=EXCLUDED.region,district=EXCLUDED.district,building_type=EXCLUDED.building_type,stage='BID',completion_date=EXCLUDED.completion_date,estimated_cost=EXCLUDED.estimated_cost,owner=EXCLUDED.owner,contractor=EXCLUDED.contractor,source_url=EXCLUDED.source_url,source_updated_at=EXCLUDED.source_updated_at,updated_at=NOW()
+        ON CONFLICT(source,external_id) DO UPDATE SET name=EXCLUDED.name,address=EXCLUDED.address,region=EXCLUDED.region,district=EXCLUDED.district,building_type=EXCLUDED.building_type,stage='BID',completion_date=EXCLUDED.completion_date,estimated_cost=EXCLUDED.estimated_cost,owner=EXCLUDED.owner,source_url=EXCLUDED.source_url,source_updated_at=EXCLUDED.source_updated_at,updated_at=NOW()
         RETURNING (xmax = 0) AS inserted`, vals);
+      // 나라장터가 공개한 발주기관 연락처만 저장합니다. 미확인 설계/감리/시공 담당자는 생성하지 않습니다.
+      const agencyName = demandAgency || agency;
+      if (agencyName) {
+        const person = firstValue(item, ['ntceInsttOfclNm','ntceInsttOfclName','dminsttOfclNm']);
+        const phone = firstValue(item, ['ntceInsttOfclTelNo','ntceInsttOfclTel','dminsttOfclTelNo']);
+        const email = firstValue(item, ['ntceInsttOfclEmailAdrs','ntceInsttOfclEmail','dminsttOfclEmailAdrs']);
+        const department = firstValue(item, ['ntceInsttOfclDeptNm','dminsttOfclDeptNm']);
+        await query(`INSERT INTO project_contacts(project_id,role,organization,department,person_name,phone,email,source,source_url)
+          VALUES ((SELECT id FROM projects WHERE source=$1 AND external_id=$2),'client',$3,$4,$5,$6,$7,'g2b_bid',$8)
+          ON CONFLICT(project_id,role,organization,source) DO UPDATE SET
+            department=COALESCE(EXCLUDED.department,project_contacts.department),
+            person_name=COALESCE(EXCLUDED.person_name,project_contacts.person_name),
+            phone=COALESCE(EXCLUDED.phone,project_contacts.phone),
+            email=COALESCE(EXCLUDED.email,project_contacts.email),
+            source_url=COALESCE(EXCLUDED.source_url,project_contacts.source_url),updated_at=NOW()`,
+          ['g2b_bid',externalId,agencyName,department,person,phone,email,sourceUrl]);
+      }
       if (r.rows[0]?.inserted) inserted++; else updated++;
     }
 
@@ -291,6 +308,23 @@ app.get("/api/admin/g2b/status", loadUser, requireAdminRole, async (req,res) => 
 });
 
 
+// 관리자 전용 연락처 확보율과 현장별 담당자 목록
+app.get('/api/admin/contacts/coverage', loadUser, requireAdminRole, async (req,res) => {
+  try {
+    const summary = await query(`SELECT COUNT(*)::int AS total,
+      COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM project_contacts c WHERE c.project_id=p.id AND c.role='client'))::int AS client_org,
+      COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM project_contacts c WHERE c.project_id=p.id AND c.role='client' AND c.phone IS NOT NULL))::int AS client_phone,
+      COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM project_contacts c WHERE c.project_id=p.id AND c.role='client' AND c.email IS NOT NULL))::int AS client_email,
+      COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM project_contacts c WHERE c.project_id=p.id AND c.role='designer'))::int AS designer,
+      COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM project_contacts c WHERE c.project_id=p.id AND c.role='supervisor'))::int AS supervisor,
+      COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM project_contacts c WHERE c.project_id=p.id AND c.role='contractor'))::int AS contractor
+      FROM projects p WHERE p.source='g2b_bid'`);
+    const contacts = await query(`SELECT p.id AS project_id,p.name AS project_name,c.role,c.organization,c.department,c.person_name,c.phone,c.email,c.source,c.source_url
+      FROM project_contacts c JOIN projects p ON p.id=c.project_id WHERE p.source='g2b_bid'
+      ORDER BY c.updated_at DESC LIMIT 100`);
+    res.json({summary:summary.rows[0],contacts:contacts.rows});
+  } catch(e) {res.status(500).json({error:e.message});}
+});
 app.get("/api/dashboard", async (req, res) => {
   try {
     const total = await query("SELECT COUNT(*)::int AS n FROM projects");
@@ -397,7 +431,7 @@ app.post("/api/ingest/projects", requireAdminRole, requireAdmin, async (req, res
       ];
       const result = await query(`INSERT INTO projects(source,external_id,name,address,region,district,building_type,stage,permit_date,start_date,completion_date,floors_above,floors_below,area_sqm,estimated_cost,owner,designer,supervisor,contractor,source_url,source_updated_at)
         VALUES(${values.map((_,i)=>`$${i+1}`).join(",")})
-        ON CONFLICT(source,external_id) DO UPDATE SET name=EXCLUDED.name,address=EXCLUDED.address,region=EXCLUDED.region,district=EXCLUDED.district,building_type=EXCLUDED.building_type,stage=EXCLUDED.stage,permit_date=EXCLUDED.permit_date,start_date=EXCLUDED.start_date,completion_date=EXCLUDED.completion_date,owner=EXCLUDED.owner,designer=EXCLUDED.designer,supervisor=EXCLUDED.supervisor,contractor=EXCLUDED.contractor,source_url=EXCLUDED.source_url,source_updated_at=EXCLUDED.source_updated_at,updated_at=NOW()
+        ON CONFLICT(source,external_id) DO UPDATE SET name=EXCLUDED.name,address=EXCLUDED.address,region=EXCLUDED.region,district=EXCLUDED.district,building_type=EXCLUDED.building_type,stage=EXCLUDED.stage,permit_date=EXCLUDED.permit_date,start_date=EXCLUDED.start_date,completion_date=EXCLUDED.completion_date,owner=EXCLUDED.owner,designer=EXCLUDED.designer,supervisor=EXCLUDED.supervisor,source_url=EXCLUDED.source_url,source_updated_at=EXCLUDED.source_updated_at,updated_at=NOW()
         RETURNING (xmax = 0) AS inserted`, values);
       if (result.rows[0]?.inserted) inserted++;
     }
