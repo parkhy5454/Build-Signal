@@ -458,6 +458,27 @@ app.post('/api/admin/permits/sync',loadUser,requireAdminRole,(req,res)=>{
  res.status(202).json({job:permitJob});
 });
 
+
+app.get('/api/admin/permits/legal-dong',loadUser,requireAdminRole,async(req,res)=>{
+ const term=String(req.query.q||'').trim();
+ if(term.length<2)return res.json({regions:[]});
+ try{
+  const r=await query("SELECT code,name FROM permit_legal_dong_codes WHERE active=TRUE AND (name ILIKE $1 OR code LIKE $2) ORDER BY name LIMIT 50",['%'+term.replace(/[\\%_]/g,'\\app.get('/api/admin/permits/regions',loadUser,requireAdminRole')+'%',term+'%']);
+  res.json({regions:r.rows.map(x=>({name:x.name,code:x.code,sigunguCd:x.code.slice(0,5),bjdongCd:x.code.slice(5,10)}))});
+ }catch(e){res.status(500).json({error:'법정동 검색 실패'});}
+});
+app.post('/api/admin/permits/legal-dong/import',loadUser,requireAdminRole,async(req,res)=>{
+ const rows=req.body?.rows;
+ if(!Array.isArray(rows)||rows.length<1||rows.length>1000)return res.status(400).json({error:'한 번에 1~1000개 코드만 등록할 수 있습니다.'});
+ const normalized=rows.map(x=>({code:String(x?.code||'').trim(),name:String(x?.name||'').trim(),active:x?.active!==false&&String(x?.active||'')!=='폐지'}));
+ if(normalized.some(x=>!/^\d{10}$/.test(x.code)||!x.name||x.name.length>250))return res.status(400).json({error:'10자리 법정동코드와 250자 이내 지역명이 필요합니다.'});
+ try{
+  let count=0;
+  for(const x of normalized){await query("INSERT INTO permit_legal_dong_codes(code,name,active) VALUES($1,$2,$3) ON CONFLICT(code) DO UPDATE SET name=EXCLUDED.name,active=EXCLUDED.active,updated_at=NOW()",[x.code,x.name,x.active]);count++;}
+  res.json({imported:count});
+ }catch(e){res.status(500).json({error:'법정동 등록 실패: '+e.message});}
+});
+
 app.get('/api/admin/permits/regions',loadUser,requireAdminRole,async(req,res)=>{
  try{const r=await query("SELECT id,label,sigungu_cd AS \"sigunguCd\",bjdong_cd AS \"bjdongCd\" FROM permit_region_presets ORDER BY label ASC LIMIT 500");res.json({regions:r.rows});}
  catch(e){res.status(500).json({error:'지역 목록 조회 실패'});}
