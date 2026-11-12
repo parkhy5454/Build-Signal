@@ -1160,6 +1160,46 @@ app.patch('/api/permits/leads/:id/followup',loadUser,async(req,res)=>{
 
 
 
+
+app.get('/api/admin/permits/team-scorecard',loadUser,requireAdminRole,async(req,res)=>{
+ try{
+  const days=Number.parseInt(req.query.days,10)||30;
+  if(![7,30,90].includes(days))return res.status(400).json({error:'기간은 7, 30, 90일 중 선택하세요.'});
+  const result=await query(`WITH assigned AS (
+   SELECT sp.user_key,
+    COUNT(*)::int AS "assignedLeads",
+    COUNT(*) FILTER (WHERE sp.status NOT IN ('WON','LOST'))::int AS "activeLeads",
+    COUNT(*) FILTER (WHERE sp.status NOT IN ('WON','LOST') AND sp.next_contact_date<(NOW() AT TIME ZONE 'Asia/Seoul')::date)::int AS overdue
+   FROM sales_pipeline sp JOIN projects p ON p.id=sp.project_id
+   WHERE p.source='arch_hub_permit' GROUP BY sp.user_key
+  ), activities AS (
+   SELECT a.user_key,COUNT(*)::int AS "activityCount",COUNT(DISTINCT a.project_id)::int AS "projectsTouched"
+   FROM sales_activities a JOIN projects p ON p.id=a.project_id
+   WHERE p.source='arch_hub_permit' AND a.created_at>=NOW()-($1::int*INTERVAL '1 day')
+   GROUP BY a.user_key
+  ), outcomes AS (
+   SELECT h.user_key,
+    COUNT(*) FILTER (WHERE h.to_status='PROPOSAL' AND h.from_status IS DISTINCT FROM h.to_status)::int AS "proposalEntries",
+    COUNT(*) FILTER (WHERE h.to_status='WON' AND h.from_status IS DISTINCT FROM h.to_status)::int AS "wonEntries",
+    COUNT(DISTINCT h.project_id) FILTER (WHERE h.to_status='WON' AND h.from_status IS DISTINCT FROM h.to_status)::int AS "uniqueWonProjects"
+   FROM sales_stage_history h JOIN projects p ON p.id=h.project_id
+   WHERE p.source='arch_hub_permit' AND h.changed_at>=NOW()-($1::int*INTERVAL '1 day')
+   GROUP BY h.user_key
+  )
+  SELECT assigned.user_key AS "userKey",assigned."assignedLeads",assigned."activeLeads",assigned.overdue,
+   COALESCE(activities."activityCount",0)::int AS "activityCount",
+   COALESCE(activities."projectsTouched",0)::int AS "projectsTouched",
+   COALESCE(outcomes."proposalEntries",0)::int AS "proposalEntries",
+   COALESCE(outcomes."wonEntries",0)::int AS "wonEntries",
+   COALESCE(outcomes."uniqueWonProjects",0)::int AS "uniqueWonProjects"
+  FROM assigned LEFT JOIN activities ON activities.user_key=assigned.user_key
+  LEFT JOIN outcomes ON outcomes.user_key=assigned.user_key
+  ORDER BY COALESCE(outcomes."uniqueWonProjects",0) DESC,COALESCE(activities."activityCount",0) DESC,assigned.user_key ASC LIMIT 200`,[days]);
+  res.json({days,members:result.rows,limit:200,timezone:'Asia/Seoul',
+   note:'등록·진행·연락 지연은 현재 상태이며, 활동·제안·수주 진입은 선택 기간의 기록입니다. 수주 진입 현장 수는 기간 내 중복 제거 값이며 활동 대비 수주 전환율이 아닙니다. 단계 변경 이력 도입 이전 데이터는 제외됩니다.'});
+ }catch(e){res.status(500).json({error:'담당자 종합 실적 조회 실패'});}
+});
+
 app.get('/api/admin/permits/team-outcomes-period',loadUser,requireAdminRole,async(req,res)=>{
  try{
   const days=Number.parseInt(req.query.days,10)||30;
