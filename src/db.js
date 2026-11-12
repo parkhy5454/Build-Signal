@@ -33,6 +33,20 @@ async function initDb() {
       approved_at TIMESTAMPTZ
     );
     CREATE INDEX IF NOT EXISTS idx_users_status ON users(status);
+    CREATE TABLE IF NOT EXISTS auto_ingest_state (
+      source TEXT PRIMARY KEY, cursor_at TIMESTAMPTZ, next_due_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      last_attempt_at TIMESTAMPTZ,last_success_at TIMESTAMPTZ,last_error TEXT,
+      lease_token TEXT,lease_until TIMESTAMPTZ,call_day DATE,daily_calls INTEGER NOT NULL DEFAULT 0
+    );
+    INSERT INTO auto_ingest_state(source) VALUES('permits'),('bids') ON CONFLICT DO NOTHING;
+    CREATE TABLE IF NOT EXISTS auto_permit_regions (
+      sigungu_cd CHAR(5) NOT NULL,bjdong_cd CHAR(5) NOT NULL,label TEXT NOT NULL DEFAULT '',
+      enabled BOOLEAN NOT NULL DEFAULT TRUE,next_page INTEGER NOT NULL DEFAULT 1 CHECK(next_page>0),
+      next_due_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),last_attempt_at TIMESTAMPTZ,last_success_at TIMESTAMPTZ,
+      last_cycle_at TIMESTAMPTZ,last_error TEXT,failures INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY(sigungu_cd,bjdong_cd)
+    );
+    CREATE INDEX IF NOT EXISTS idx_auto_permit_due ON auto_permit_regions(next_due_at) WHERE enabled=TRUE;
     CREATE TABLE IF NOT EXISTS permit_region_queues (
       id BIGSERIAL PRIMARY KEY,
       label TEXT NOT NULL,

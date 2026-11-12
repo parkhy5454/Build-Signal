@@ -9,6 +9,7 @@ const bcrypt = require("bcryptjs");
 const { query, initDb } = require("./db");
 const { profiles, scoreProject } = require("./scoring");
 const { permitDate, permitLifecycle } = require("./archhub");
+const { createAutoIngest } = require("./auto-ingest");
 
 const app = express();
 // Render terminates HTTPS at its proxy; trust the proxy so secure session cookies are issued.
@@ -166,7 +167,7 @@ app.get("/api/health", async (req, res) => {
 });
 
 // 7일 전체 수집은 Render HTTP 응답 제한을 피하도록 백그라운드에서 진행합니다.
-// 단일 프로세스 실행 기준이며 서버 재시작 시 작업은 중단됩니다.
+// 수동 작업 상태는 프로세스 메모리, 자동 작업의 실행권/진행 위치는 DB에 저장합니다.
 let g2bJob = null;
 const g2bFormatKst = d => {
   const parts = new Intl.DateTimeFormat('en-US', {
@@ -242,7 +243,7 @@ async function g2bRunJob(job) {
   try {
     // 성공 확인된 1시간 조회 범위로 고정. 마지막 1시간은 분 경계에서 겹치지 않도록 처리.
     const end = new Date(job.endedAt);
-    const beginning = new Date(end.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const beginning = job.beginningAt ? new Date(job.beginningAt) : new Date(end.getTime() - 7 * 24 * 60 * 60 * 1000);
     const windowMs = 60 * 60 * 1000;
     job.totalWindows = Math.ceil((end - beginning) / windowMs);
     for (let i = 0; i < job.totalWindows; i++) {
@@ -255,6 +256,7 @@ async function g2bRunJob(job) {
           if (page > 100) throw new Error('한 시간 구간에서 100페이지를 초과했습니다.');
           let result;
           for (let attempt = 0; attempt < 3; attempt++) {
+            if(job.beforePage)await job.beforePage();
             try { result = await g2bFetchPage(from, to, page); break; }
             catch (e) { if (attempt === 2) throw e; await g2bPause(1500 * (attempt + 1)); }
           }
@@ -317,8 +319,10 @@ async function g2bRunJob(job) {
           page++;
           await g2bPause(150);
         }
+        if(job.onWindowSuccess)await job.onWindowSuccess(to.toISOString());
       } catch (e) {
         job.errors.push(`${g2bFormatKst(from)}~${g2bFormatKst(to)}: ${e.message}`.slice(0, 300));
+        if(job.automatic)break;
       }
       job.completedWindows++;
       await g2bPause(120);
@@ -326,7 +330,7 @@ async function g2bRunJob(job) {
     job.status = job.errors.length ? 'partial' : 'completed';
     await query("INSERT INTO ingest_logs(source,received_count,inserted_count,status,message) VALUES($1,$2,$3,$4,$5)",
       ['g2b_bid', job.received, job.inserted, job.errors.length ? 'ERROR' : 'SUCCESS',
-       `7day sync: updated=${job.updated}, skipped=${job.skipped}, failed_windows=${job.errors.length}`]);
+       `${job.automatic?'automatic':'7day'} sync: updated=${job.updated}, skipped=${job.skipped}, failed_windows=${job.errors.length}`]);
   } catch (e) {
     job.status = 'failed'; job.errors.push(String(e.message));
   } finally { job.finishedAt = new Date().toISOString(); }
@@ -406,7 +410,10 @@ async function savePermitJob(job){
 async function permitSync(job,opts){
  try{
   const key=process.env.ARCH_HUB_SERVICE_KEY;
-  for(let page=1;page<=20;page++){
+  if(!opts.automatic)await query("INSERT INTO auto_permit_regions(sigungu_cd,bjdong_cd) VALUES($1,$2) ON CONFLICT DO NOTHING",[opts.sigunguCd,opts.bjdongCd]);
+  const firstPage=opts.startPage||1,lastPage=firstPage+(opts.pageBudget||20)-1;
+  for(let page=firstPage;page<=lastPage;page++){
+   if(opts.beforePage)await opts.beforePage();
    const url=new URL('https://apis.data.go.kr/1613000/ArchPmsHubService/getApBasisOulnInfo');
    for(const [k,v] of Object.entries({serviceKey:key,_type:'json',sigunguCd:opts.sigunguCd,bjdongCd:opts.bjdongCd,startDate:opts.startDate,endDate:opts.endDate,numOfRows:'100',pageNo:String(page)})){if(v)url.searchParams.set(k,v);}
    const response=await fetch(url,{signal:AbortSignal.timeout(20000)});
@@ -443,8 +450,10 @@ async function permitSync(job,opts){
     job.byStage[result.rows[0]?.stage||stage]++;
    }
    job.total=Number(body.totalCount)||0;
-   if(!items.length||(job.total>0&&page*100>=job.total)||items.length<100)break;
-   if(page===20)throw Error('안전 제한 2000건에 도달했습니다. 일부 자료만 저장되었습니다. 날짜 범위를 지정하거나 분할 수집하세요.');
+   job.hasMore=!!items.length&&items.length===100&&!(job.total>0&&page*100>=job.total);
+   job.nextPage=job.hasMore?page+1:1;
+   if(!job.hasMore)break;
+   if(page===lastPage&&!opts.automatic)throw Error('안전 제한 2000건에 도달했습니다. 일부 자료만 저장되었습니다. 날짜 범위를 지정하거나 분할 수집하세요.');
   }
   job.status='completed';
   job.note=job.received===0?'조회된 원천 자료가 없습니다. 지역코드 또는 기간을 확인하세요.': '국토교통부 건축HUB 자료 저장 완료. 준공은 사용승인일 확인 기준입니다.';
@@ -1771,6 +1780,29 @@ app.post("/api/admin/demo-seed", requireAdmin, async (req,res) => {
 });
 
 app.get("/login", (req,res)=>res.sendFile(path.join(__dirname,"..","public","login.html")));
+const automaticIngest=createAutoIngest({query,
+ busy:source=>source==='bids'?g2bJob?.status==='running':permitJob?.status==='running',
+ permit:async opts=>{
+  const job={status:'running',automatic:true,received:0,inserted:0,updated:0,skipped:0,pages:0,startedAt:new Date().toISOString()};
+  await permitSync(job,opts);return job;
+ },
+ bids:async opts=>{
+  const job={...opts,status:'running',startedAt:new Date().toISOString(),completedWindows:0,totalWindows:0,received:0,inserted:0,updated:0,skipped:0,pages:0,current:'',errors:[]};
+  g2bJob=job;await g2bRunJob(job);
+  if(job.status!=='completed')throw Error(job.errors[0]||'나라장터 자동 수집 실패');
+ }
+});
+app.get('/api/ingestion/freshness',async(req,res)=>{
+ try{
+  const states=await query("SELECT source,last_success_at,last_attempt_at,next_due_at,last_error,CASE WHEN call_day=(NOW() AT TIME ZONE 'Asia/Seoul')::date THEN daily_calls ELSE 0 END AS daily_calls,call_day,lease_until FROM auto_ingest_state ORDER BY source");
+  const coverage=await query(`SELECT COUNT(*) FILTER (WHERE enabled)::int AS regions,
+   COUNT(*) FILTER (WHERE enabled AND last_cycle_at IS NOT NULL)::int AS completed_regions,
+   MIN(last_cycle_at) FILTER (WHERE enabled) AS oldest_cycle,
+   COUNT(*) FILTER (WHERE enabled AND last_error IS NOT NULL)::int AS failed_regions FROM auto_permit_regions`);
+  res.json({enabled:automaticIngest.enabled(),configured:{permits:!!process.env.ARCH_HUB_SERVICE_KEY,bids:!!process.env.G2B_SERVICE_KEY},sources:states.rows,coverage:coverage.rows[0],
+   note:'국토부는 등록 지역을 순회 갱신합니다. 처리량과 원천 API 반영 주기에 따라 지연될 수 있습니다. 지역 코드가 등록되지 않은 지역은 자동 수집 범위에 포함되지 않습니다.'});
+ }catch{res.status(500).json({error:'자동 수집 현황 조회 실패'});}
+});
 async function start() {
   await initDb();
   if (process.env.ADMIN_EMAIL && process.env.ADMIN_PASSWORD) {
@@ -1781,6 +1813,6 @@ async function start() {
       ON CONFLICT(email) DO UPDATE SET password_hash=EXCLUDED.password_hash,role='admin',status='approved'`,[email,hash]);
   }
   const port = process.env.PORT || 10000;
-  app.listen(port, () => console.log(`BUILD SIGNAL listening on ${port}`));
+  app.listen(port, () => {console.log(`BUILD SIGNAL listening on ${port}`);automaticIngest.start();});
 }
 start().catch(e => { console.error("Startup failed:", e); process.exit(1); });
