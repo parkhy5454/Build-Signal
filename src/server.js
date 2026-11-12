@@ -361,6 +361,35 @@ app.get('/api/admin/permits/status',loadUser,requireAdminRole,async(req,res)=>{
  }catch(e){res.status(500).json({error:'건축허가 수집 상태를 확인하지 못했습니다.'});}
 });
 
+
+// Admin-only safe probe of the official ArchPmsHubService operation.
+// The operation URL is configured separately because the API service root is not callable.
+app.post('/api/admin/permits/test',loadUser,requireAdminRole,async(req,res)=>{
+ const key=process.env.ARCH_HUB_SERVICE_KEY;
+ const endpoint='https://apis.data.go.kr/1613000/ArchPmsHubService/getApBasisOulnInfo';
+ if(!key)return res.status(400).json({error:'ARCH_HUB_SERVICE_KEY가 설정되지 않았습니다.'});
+ let url;
+ try{url=new URL(endpoint);}catch{return res.status(400).json({error:'오퍼레이션 URL 형식이 올바르지 않습니다.'});}
+ if(url.protocol!=='https:'||url.hostname!=='apis.data.go.kr'||!url.pathname.startsWith('/1613000/ArchPmsHubService/'))
+  return res.status(400).json({error:'공식 건축HUB 오퍼레이션 URL만 허용됩니다.'});
+ const today=new Date(),yesterday=new Date(today.getTime()-86400000);
+ const ymd=d=>d.toISOString().slice(0,10).replace(/-/g,'');
+ url.searchParams.set('serviceKey',key);
+ url.searchParams.set('numOfRows','1');url.searchParams.set('pageNo','1');
+ url.searchParams.set('_type','json');url.searchParams.set('sigunguCd','11680');url.searchParams.set('bjdongCd','10300');url.searchParams.set('startDate',ymd(yesterday));url.searchParams.set('endDate',ymd(today));
+ try{
+  const response=await fetch(url,{signal:AbortSignal.timeout(15000)});
+  const raw=await response.text();
+  // Return only metadata, not the response body or URL, to avoid accidental key disclosure.
+  let parsed;try{parsed=JSON.parse(raw)}catch{}
+  const header=parsed?.response?.header||{};
+  res.json({httpStatus:response.status,contentType:response.headers.get('content-type')||'',json:!!parsed,
+   resultCode:String(header.resultCode||''),resultMsg:String(header.resultMsg||'').slice(0,160),
+   hasItems:!!parsed?.response?.body?.items,hasTotalCount:parsed?.response?.body?.totalCount!==undefined,
+   note:'공식 가이드의 강남구 개포동 샘플 지역에 대한 읽기 전용 연결 시험입니다. 데이터 저장은 하지 않습니다.'});
+ }catch(e){res.status(502).json({error:e.name==='TimeoutError'?'API 응답 시간 초과':'건축HUB API 연결 실패'});}
+});
+
 // 관리자 전용 연락처 확보율과 현장별 담당자 목록
 app.get('/api/admin/contacts/coverage', loadUser, requireAdminRole, async (req,res) => {
   try {
