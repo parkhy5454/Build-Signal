@@ -383,7 +383,7 @@ app.get("/api/dashboard", async (req, res) => {
 // 회원 화면: 프로젝트명 우선 검색, 연락처 확보 여부 및 공종 필터
 app.get("/api/projects", async (req, res) => {
   try {
-    const { q = "", region = "", stage = "", type = "", contact = "", page = "1", limit = "30" } = req.query;
+    const { q = "", region = "", stage = "", type = "", contact = "", dateField = "event", from = "", to = "", page = "1", limit = "30" } = req.query;
     const p = Math.max(1, Number(page) || 1), l = Math.min(100, Math.max(1, Number(limit) || 30));
     const params = [], where = [];
     function add(v, sql) { where.push(sql.replace(/\?/g, () => { params.push(v); return `$${params.length}`; })); }
@@ -394,6 +394,13 @@ app.get("/api/projects", async (req, res) => {
     if (type) add(`%${String(type).slice(0,80)}%`, "p.building_type ILIKE ?");
     if (contact === 'any') where.push("EXISTS (SELECT 1 FROM project_contacts pc WHERE pc.project_id=p.id)");
     if (['client','designer','supervisor','contractor'].includes(contact)) add(contact, "EXISTS (SELECT 1 FROM project_contacts pc WHERE pc.project_id=p.id AND pc.role=?)");
+    const dateColumn = dateField === "collected" ? "p.created_at::date" : "CASE WHEN p.stage = 'PERMIT' THEN p.permit_date WHEN p.stage = 'STARTED' THEN p.start_date WHEN p.stage = 'BID' THEN p.source_updated_at ELSE COALESCE(p.permit_date,p.start_date,p.source_updated_at) END";
+    for (const [value,op] of [[from,">="],[to,"<="]]) {
+      if (!value) continue;
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(String(value)) || !Number.isFinite(Date.parse(String(value)))) return res.status(400).json({error:"날짜 형식은 YYYY-MM-DD이어야 합니다."});
+      add(String(value), `(${dateColumn}) ${op} ?::date`);
+    }
+    if(from && to && from>to)return res.status(400).json({error:"시작일이 종료일보다 늦습니다."});
     const clause = where.length ? `WHERE ${where.join(" AND ")}` : "";
     const count = await query(`SELECT COUNT(*)::int AS n FROM projects p ${clause}`, params);
     const rows = await query(`SELECT p.*,
