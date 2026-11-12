@@ -460,6 +460,21 @@ app.post('/api/admin/permits/sync',loadUser,requireAdminRole,(req,res)=>{
 
 
 
+
+app.get('/api/admin/permits/legal-dong/queue-preview',loadUser,requireAdminRole,async(req,res)=>{
+ const q=String(req.query.q||'').trim();
+ if(q.length<2||q.length>100)return res.status(400).json({error:'지역 검색어는 2~100자여야 합니다.'});
+ try{
+  const pattern='%'+q+'%';
+  const result=await query("SELECT code,name FROM permit_legal_dong_codes WHERE active=TRUE AND name ILIKE $1 ORDER BY code LIMIT 200",[pattern]);
+  const total=await query("SELECT COUNT(*)::int AS total FROM permit_legal_dong_codes WHERE active=TRUE AND name ILIKE $1",[pattern]);
+  const regions=result.rows.map(x=>({name:x.name,code:x.code,sigunguCd:x.code.slice(0,5),bjdongCd:x.code.slice(5,10)}));
+  const batches=[];
+  for(let i=0;i<regions.length;i+=20)batches.push({number:batches.length+1,regions:regions.slice(i,i+20)});
+  res.json({total:total.rows[0].total,prepared:regions.length,truncated:total.rows[0].total>200,batches});
+ }catch(e){res.status(500).json({error:'수집 작업 목록 생성 실패'});}
+});
+
 app.get('/api/admin/permits/legal-dong/batch-preview',loadUser,requireAdminRole,async(req,res)=>{
  const q=String(req.query.q||'').trim();
  const offset=Number(req.query.offset||0);
