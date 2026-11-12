@@ -1158,6 +1158,26 @@ app.patch('/api/permits/leads/:id/followup',loadUser,async(req,res)=>{
 
 
 
+
+app.get('/api/admin/permits/team-activity-period',loadUser,requireAdminRole,async(req,res)=>{
+ try{
+  const days=Number.parseInt(req.query.days,10)||30;
+  if(![7,30,90].includes(days))return res.status(400).json({error:'기간은 7, 30, 90일 중 선택하세요.'});
+  const rows=await query(`SELECT a.user_key AS "userKey",
+   COUNT(*)::int AS "activityCount",
+   COUNT(DISTINCT a.project_id)::int AS "projectsTouched",
+   COUNT(*) FILTER (WHERE a.activity_type='CALL')::int AS calls,
+   COUNT(*) FILTER (WHERE a.activity_type='EMAIL')::int AS emails,
+   COUNT(*) FILTER (WHERE a.activity_type='MEETING')::int AS meetings,
+   COUNT(*) FILTER (WHERE a.activity_type='FOLLOW_UP')::int AS followUps
+   FROM sales_activities a JOIN projects p ON p.id=a.project_id
+   WHERE p.source='arch_hub_permit' AND a.created_at>=NOW()-($1::int*INTERVAL '1 day')
+   GROUP BY a.user_key ORDER BY COUNT(*) DESC,a.user_key ASC LIMIT 200`,[days]);
+  res.json({days,members:rows.rows,limit:200,
+   note:'선택한 기간의 실제 영업 활동 기록만 집계합니다. 수주 실적은 현재 상태이므로 기간별 수주로 간주하지 않습니다. 활동 기록이 없는 담당자는 목록에서 제외됩니다.'});
+ }catch(e){res.status(500).json({error:'담당자 기간별 영업 활동 조회 실패'});}
+});
+
 app.get('/api/admin/permits/team-performance',loadUser,requireAdminRole,async(req,res)=>{
  try{
   const rows=await query(`SELECT sp.user_key AS "userKey",
