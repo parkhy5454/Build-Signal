@@ -2,6 +2,7 @@ name: Syntax validation
 on:
   push:
     branches:
+      - 'feature/group-link-monitoring'
       - 'feature/stage3-contact-visibility'
   pull_request:
 jobs:
