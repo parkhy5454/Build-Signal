@@ -335,35 +335,56 @@ app.get("/api/dashboard", async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// 회원 화면: 프로젝트명 우선 검색, 연락처 확보 여부 및 공종 필터
 app.get("/api/projects", async (req, res) => {
   try {
-    const { q = "", region = "", stage = "", type = "", page = "1", limit = "30" } = req.query;
+    const { q = "", region = "", stage = "", type = "", contact = "", page = "1", limit = "30" } = req.query;
     const p = Math.max(1, Number(page) || 1), l = Math.min(100, Math.max(1, Number(limit) || 30));
     const params = [], where = [];
-    function add(value, expr) { params.push(value); where.push(expr.replace("?", `$${params.length}`)); }
-    if (q) add(`%${q}%`, "(name ILIKE ? OR address ILIKE ? OR owner ILIKE ? OR designer ILIKE ? OR contractor ILIKE ?)");
-    if (region) add(`%${region}%`, "region ILIKE ?");
-    if (stage) add(stage, "stage = ?");
-    if (type) add(`%${type}%`, "building_type ILIKE ?");
-    // q needs five identical positional parameters
-    if (q) {
-      const idx = params.length;
-      where[0] = `(name ILIKE $${idx} OR address ILIKE $${idx} OR owner ILIKE $${idx} OR designer ILIKE $${idx} OR contractor ILIKE $${idx})`;
-    }
+    function add(v, sql) { params.push(v); where.push(sql.replace(/\\?/g, `$${params.length}`)); }
+    const keyword = String(q).trim().slice(0,120);
+    if (keyword) add(`%${keyword}%`, "(p.name ILIKE ? OR p.address ILIKE ? OR p.owner ILIKE ? OR p.designer ILIKE ? OR p.contractor ILIKE ? OR EXISTS (SELECT 1 FROM project_contacts pc WHERE pc.project_id=p.id AND (pc.organization ILIKE ? OR pc.person_name ILIKE ?)))");
+    if (region) add(`%${String(region).slice(0,60)}%`, "p.region ILIKE ?");
+    if (stage) add(String(stage).slice(0,30), "p.stage = ?");
+    if (type) add(`%${String(type).slice(0,80)}%`, "p.building_type ILIKE ?");
+    if (contact === 'any') where.push("EXISTS (SELECT 1 FROM project_contacts pc WHERE pc.project_id=p.id)");
+    if (['client','designer','supervisor','contractor'].includes(contact)) add(contact, "EXISTS (SELECT 1 FROM project_contacts pc WHERE pc.project_id=p.id AND pc.role=?)");
     const clause = where.length ? `WHERE ${where.join(" AND ")}` : "";
-    const count = await query(`SELECT COUNT(*)::int AS n FROM projects ${clause}`, params);
-    const rows = await query(`SELECT * FROM projects ${clause} ORDER BY updated_at DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`, [...params, l, (p - 1) * l]);
-    res.json({ rows: rows.rows, total: count.rows[0].n, page: p, pages: Math.ceil(count.rows[0].n / l) });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+    const count = await query(`SELECT COUNT(*)::int AS n FROM projects p ${clause}`, params);
+    const rows = await query(`SELECT p.*,
+      (SELECT COUNT(*)::int FROM project_contacts pc WHERE pc.project_id=p.id) AS contact_count,
+      EXISTS(SELECT 1 FROM project_contacts pc WHERE pc.project_id=p.id AND pc.phone IS NOT NULL AND pc.phone<>'') AS has_phone,
+      EXISTS(SELECT 1 FROM project_contacts pc WHERE pc.project_id=p.id AND pc.email IS NOT NULL AND pc.email<>'') AS has_email
+      FROM projects p ${clause}
+      ORDER BY CASE WHEN $${params.length+1}::text <> '' AND p.name ILIKE $${params.length+2} THEN 0 ELSE 1 END,
+        p.updated_at DESC LIMIT $${params.length+3} OFFSET $${params.length+4}`,
+      [...params, keyword, `${keyword}%`, l, (p-1)*l]);
+    res.json({rows:rows.rows,total:count.rows[0].n,page:p,pages:Math.ceil(count.rows[0].n/l)});
+  } catch(e) {res.status(500).json({error:e.message});}
 });
 
+app.get('/api/contacts/summary', async (req,res) => {
+  try {
+    const r=await query(`SELECT COUNT(*)::int AS total,
+      COUNT(*) FILTER (WHERE EXISTS(SELECT 1 FROM project_contacts c WHERE c.project_id=p.id AND c.role='client'))::int AS client,
+      COUNT(*) FILTER (WHERE EXISTS(SELECT 1 FROM project_contacts c WHERE c.project_id=p.id AND c.role='designer'))::int AS designer,
+      COUNT(*) FILTER (WHERE EXISTS(SELECT 1 FROM project_contacts c WHERE c.project_id=p.id AND c.role='supervisor'))::int AS supervisor,
+      COUNT(*) FILTER (WHERE EXISTS(SELECT 1 FROM project_contacts c WHERE c.project_id=p.id AND c.role='contractor'))::int AS contractor,
+      COUNT(*) FILTER (WHERE EXISTS(SELECT 1 FROM project_contacts c WHERE c.project_id=p.id AND c.phone IS NOT NULL AND c.phone<>''))::int AS phone,
+      COUNT(*) FILTER (WHERE EXISTS(SELECT 1 FROM project_contacts c WHERE c.project_id=p.id AND c.email IS NOT NULL AND c.email<>''))::int AS email
+      FROM projects p WHERE p.source='g2b_bid'`);
+    res.json(r.rows[0]);
+  } catch(e){res.status(500).json({error:e.message});}
+});
 app.get("/api/projects/:id", async (req, res) => {
   try {
     const r = await query("SELECT * FROM projects WHERE id=$1", [req.params.id]);
     if (!r.rowCount) return res.status(404).json({ error: "현장을 찾을 수 없습니다." });
     const f = await query("SELECT id FROM favorites WHERE project_id=$1 AND user_key=$2", [req.params.id, String(req.user.id)]);
     const s = await query("SELECT status,note FROM sales_pipeline WHERE project_id=$1 AND user_key=$2", [req.params.id, String(req.user.id)]);
-    res.json({ ...r.rows[0], favorite: !!f.rowCount, pipeline: s.rows[0] || { status: "NEW", note: "" } });
+    const contacts = await query(`SELECT role,organization,department,person_name,phone,email,source,source_url,verified_at,updated_at
+      FROM project_contacts WHERE project_id=$1 ORDER BY CASE role WHEN 'client' THEN 1 WHEN 'designer' THEN 2 WHEN 'supervisor' THEN 3 ELSE 4 END, updated_at DESC`,[req.params.id]);
+    res.json({ ...r.rows[0], contacts: contacts.rows, favorite: !!f.rowCount, pipeline: s.rows[0] || { status: "NEW", note: "" } });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

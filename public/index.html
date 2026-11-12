@@ -10,7 +10,7 @@
   <div class="brand"><div class="brand-mark">BS</div><div><b>BUILD SIGNAL</b><small>Construction Intelligence</small></div></div>
   <nav>
     <a class="active" href="#dashboard" data-page="dashboard">▦ 대시보드</a>
-    <a href="#projects" data-page="projects">⌕ 전국 현장 검색</a>
+    <a href="#projects" data-page="projects">⌕ 프로젝트·연락처 검색</a>
     <a href="#recommend" data-page="recommend">✦ AI 영업 추천</a>
     <a href="#favorites" data-page="favorites">☆ 관심 현장</a>
   </nav>
@@ -26,20 +26,24 @@
     <article class="stat"><span>착공</span><strong id="started">-</strong><small>시공·설비 영업 기회</small></article>
     <article class="stat"><span>관심 현장</span><strong id="favoritesCount">-</strong><small>내 영업 후보</small></article>
   </div>
+  <div class="section-head"><div><h3>실제 공고 연락처 확보 현황</h3><p>발주처·설계사·감리사·시공사별 확인된 공개 업무 연락처</p></div><a href="#projects" data-go="projects">프로젝트 검색 →</a></div>
+  <div id="contactSummary" class="contact-summary"><div class="panel">연락처 현황을 불러오는 중...</div></div>
   <div class="section-head"><div><h3>최근 등록 현장</h3><p>최근 수집 또는 업데이트된 프로젝트</p></div><a href="#projects" data-go="projects">전체 보기 →</a></div>
   <div id="recent" class="project-list"></div>
-  <div class="notice">ⓘ 현재 샘플 데이터는 화면 검증용 가상 정보입니다. 실제 공공기관 데이터 연동 후 실데이터로 교체됩니다.</div>
+  <div class="notice" id="demoNotice" hidden>ⓘ 데모 데이터가 포함되어 있습니다. 실제 공고와 구분해 확인하세요.</div>
 </section>
 <section id="projects" class="page">
   <div class="panel filters">
-    <label>키워드<input id="q" placeholder="현장명, 주소, 업체명 검색"></label>
+    <label>키워드<input id="q" placeholder="프로젝트명, 공고명, 발주처, 담당자 검색"></label>
     <label>지역<select id="region"><option value="">전국 전체</option><option>서울특별시</option><option>경기도</option><option>인천광역시</option><option>부산광역시</option><option>대전광역시</option><option>제주특별자치도</option></select></label>
     <label>진행 단계<select id="stage"><option value="">전체 단계</option><option value="PERMIT">인허가</option><option value="STARTED">착공</option><option value="COMPLETED">준공</option><option value="BID">입찰</option></select></label>
     <label>건물 용도<input id="type" placeholder="예: 숙박시설"></label>
+    <label>연락처 확보<select id="contactFilter"><option value="">전체 프로젝트</option><option value="any">연락처 확보 현장</option><option value="client">발주처</option><option value="designer">설계사</option><option value="supervisor">감리사</option><option value="contractor">시공사</option></select></label>
     <button class="button primary" id="searchBtn">검색</button>
   </div>
   <div class="section-head"><div><h3>전국 건설현장</h3><p id="resultCount">검색 결과</p></div><a class="button light" href="/api/export.csv">CSV 다운로드</a></div>
   <div id="projectResults" class="project-list"></div>
+  <div class="pagination"><button class="button light" id="prevPage">← 이전</button><span id="pageInfo">1 / 1</span><button class="button light" id="nextPage">다음 →</button></div>
 </section>
 <section id="recommend" class="page">
   <div class="panel"><h3>우리 제품에 맞는 영업현장 찾기</h3><p class="muted">영업 업종을 선택하면 건물 용도·규모·공정 단계에 따라 우선순위를 계산합니다.</p>
