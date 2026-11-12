@@ -1078,6 +1078,37 @@ app.put("/api/projects/:id/pipeline", async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+
+// Early-stage ArchHUB permit lead ranking: transparent heuristic, not a sales forecast.
+app.get('/api/permits/leads',async(req,res)=>{
+ try{
+  const profile=profiles[req.query.profile]?req.query.profile:'automation';
+  const limit=Math.min(100,Math.max(1,Number.parseInt(req.query.limit,10)||30));
+  const rows=await query(`SELECT p.*,
+   (SELECT COUNT(*)::int FROM project_contacts c WHERE c.project_id=p.id) AS contact_count
+   FROM projects p WHERE p.source='arch_hub_permit' ORDER BY p.updated_at DESC LIMIT 2000`);
+  const now=Date.now();
+  const ranked=rows.rows.map(p=>{
+   const base=scoreProject(p,profile);
+   const days=p.permit_date?Math.floor((now-new Date(p.permit_date).getTime())/86400000):null;
+   const freshness=days!==null&&days>=0&&days<=90?15:days!==null&&days<=365&&days>=0?8:0;
+   const early=p.stage==='PERMIT'?10:0;
+   const dataQuality=(p.address?3:0)+(p.permit_date?2:0)+(p.owner?3:0)+(Number(p.contact_count)>0?2:0);
+   const score=Math.min(100,Math.round(base*0.65+freshness+early+dataQuality));
+   const reasons=[];
+   if(early)reasons.push('허가 단계');
+   if(freshness)reasons.push('최근 허가일');
+   if(base>=50)reasons.push('업종·규모 적합');
+   if(Number(p.contact_count)>0)reasons.push('연락처 등록');
+   return {id:p.id,name:p.name,address:p.address,region:p.region,buildingType:p.building_type,
+    stage:p.stage,permitDate:p.permit_date,areaSqm:p.area_sqm,owner:p.owner,
+    contactCount:p.contact_count,score,reasons};
+  }).sort((a,b)=>b.score-a.score||(new Date(b.permitDate||0)-new Date(a.permitDate||0))).slice(0,limit);
+  res.json({profile:profiles[profile].label,rows:ranked,scanned:rows.rows.length,
+   note:'최근 갱신 2,000건 내 휴리스틱 순위입니다. 실제 수주 가능성이나 전국 전체 현장 순위를 보장하지 않습니다.'});
+ }catch(e){res.status(500).json({error:'건축허가 영업 우선순위 조회 실패'});}
+});
+
 app.get("/api/recommendations", async (req, res) => {
   try {
     const key = profiles[req.query.profile] ? req.query.profile : "automation";
