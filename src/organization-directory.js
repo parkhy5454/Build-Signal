@@ -1,8 +1,23 @@
 const crypto=require('node:crypto');
+// Registry fields verified against each publisher's ODCloud OpenAPI manifest (2026-11-12).
 const SOURCES={
- architects:{label:'전국 건축사사무소',url:'https://www.data.go.kr/data/15129439/standard.do'},
- busan_developers:{label:'부산 부동산개발업체',url:'https://www.data.go.kr/data/15134260/fileData.do'}
+ architects:{label:'전국 건축사사무소',url:'https://www.data.go.kr/data/15129439/standard.do',region:'전국',phoneProvided:true},
+ busan_developers:{label:'부산 부동산개발업체',region:'부산',dataset:'15134260',phoneProvided:true,addressFields:['주사무소 소재지']},
+ daegu_developers:{label:'대구 부동산개발업체',region:'대구',dataset:'15074138',phoneProvided:true,addressFields:['주사무소 소재지']},
+ incheon_developers:{label:'인천 부동산개발업체',region:'인천',dataset:'15103000',phoneProvided:false,addressFields:['사무소 소재지','영업소재지']},
+ ulsan_developers:{label:'울산 부동산개발업체',region:'울산',dataset:'15047634',phoneProvided:false,addressFields:['영업소소재지']},
+ chungnam_developers:{label:'충남 부동산개발업체',region:'충남',dataset:'15018881',phoneProvided:true,addressFields:['영업소재지']}
 };
+for(const entry of Object.values(SOURCES))if(entry.dataset)entry.url='https://www.data.go.kr/data/'+entry.dataset+'/fileData.do';
+function inactiveRegistration(value){return /폐업|말소|취소|정지/.test(text(value));}
+function coverageSummary(states){
+ return Object.entries(SOURCES).map(([source,info])=>{
+  const state=states.find(x=>x.source===source);
+  return {source,label:info.label,region:info.region,url:info.url,phoneProvided:info.phoneProvided,
+   status:state?.last_success_at?(state.last_error?'retained':'synced'):'pending',
+   recordCount:Number(state?.record_count||0),lastSuccessAt:state?.last_success_at||null};
+ });
+}
 const text=v=>String(v??'').normalize('NFKC').trim().replace(/\s+/g,' ');
 const digest=v=>crypto.createHash('sha256').update(v).digest('hex');
 function nameKey(value){return text(value).toLowerCase().replace(/^(?:주식회사|유한회사|유한책임회사|\(주\)|\(유\))\s*/,'').replace(/\s*(?:주식회사|유한회사|\(주\)|\(유\))$/,'').replace(/[\s.,·ㆍ()]/g,'');}
@@ -11,11 +26,12 @@ function validPhone(value){const raw=text(value);if(!/^[+\d() .-]+$/.test(raw))r
 function read(row,...keys){const entries=new Map(Object.entries(row).map(([k,v])=>[k.replace(/_/g,'').toLowerCase(),v]));for(const k of keys){const v=entries.get(k.replace(/_/g,'').toLowerCase());if(v!==undefined&&v!==null&&text(v))return text(v);}return '';}
 function normalizeRecord(row,source){
  const architecture=source==='architects';
+ if(!SOURCES[source])throw Error('지원하지 않는 명부 출처');
  const organization=architecture?read(row,'CO_NM','사무소명'):read(row,'상호');
- const address=architecture?read(row,'LCTN_ROAD_NM','소재지도로명주소','LCTN_LOTNO_ADDR','소재지지번주소'):read(row,'주사무소 소재지');
+ const address=architecture?read(row,'LCTN_ROAD_NM','소재지도로명주소','LCTN_LOTNO_ADDR','소재지지번주소'):read(row,...SOURCES[source].addressFields);
  if(!organization||!address||organization.length>200||address.length>500)throw Error('업체명·사업장 주소 필드 누락 또는 형식 변경');
- const record={source,organization,name_key:nameKey(organization),address,address_key:addressKey(address),registration_no:read(row,'부동산개발업등록번호','신고번호')||null,
-  representative:read(row,'RPRSV_NM','대표자명')||null,phone:validPhone(read(row,'TELNO','전화번호')),data_date:architecture?read(row,'DATA_CRTR_YMD','데이터기준일자')||null:row.__directoryDate||null,source_url:SOURCES[source].url};
+ const record={source,organization,name_key:nameKey(organization),address,address_key:addressKey(address),registration_status:read(row,'등록상태','상태')||null,registration_no:read(row,'부동산개발업등록번호','등록번호','신고번호')||null,
+  representative:read(row,'RPRSV_NM','대표자명','대표자')||null,phone:!architecture&&(!SOURCES[source].phoneProvided||inactiveRegistration(read(row,'등록상태','상태')))?null:validPhone(read(row,'TELNO','전화번호')),data_date:architecture?read(row,'DATA_CRTR_YMD','데이터기준일자')||null:row.__directoryDate||null,source_url:SOURCES[source].url};
  record.fingerprint=digest(JSON.stringify(record));return record;
 }
 async function json(url,options={}){
@@ -49,10 +65,11 @@ async function fetchArchitects(env,request=json){
  }
  throw Error('건축사 API 20페이지 제한: 이전 명부 유지');
 }
-async function fetchDevelopers(env,request=json){
- if(!env.DEVELOPER_DIRECTORY_KEY)throw Error('DEVELOPER_DIRECTORY_KEY 설정·부산 부동산개발업 API 활용신청 필요');
- const spec=await request('https://infuser.odcloud.kr/oas/docs?namespace=15134260/v1');
- const versions=Object.entries(spec.paths||{}).filter(([path,item])=>/^\/15134260\/v1\/uddi:[a-f0-9-]+$/.test(path)&&/부산.*부동산개발업/.test(item.get?.summary||'')).map(([path,item])=>({path,date:(item.get.summary.match(/(20\d{6})/)||[])[1]})).filter(x=>x.date).sort((a,b)=>b.date.localeCompare(a.date));
+async function fetchDevelopers(env,request=json,source='busan_developers'){
+ const info=SOURCES[source];if(!info?.dataset)throw Error('지원하지 않는 개발업체 명부');
+ if(!env.DEVELOPER_DIRECTORY_KEY)throw Error('DEVELOPER_DIRECTORY_KEY 설정·'+info.label+' API 활용신청 필요');
+ const spec=await request('https://infuser.odcloud.kr/oas/docs?namespace='+info.dataset+'/v1');
+ const versions=Object.entries(spec.paths||{}).filter(([path,item])=>new RegExp('^/'+info.dataset+'/v1/uddi:[a-f0-9-]+(?:_[0-9]+)?$').test(path)&&/부동산개발업/.test(item.get?.summary||'')).map(([path,item])=>({path,date:(item.get.summary.match(/(20\d{6})/)||[])[1]})).filter(x=>x.date&&Number(x.date.slice(4,6))>=1&&Number(x.date.slice(4,6))<=12&&Number(x.date.slice(6))>=1&&Number(x.date.slice(6))<=31).sort((a,b)=>b.date.localeCompare(a.date));
  if(!versions.length)throw Error('개발업체 API 파일 버전 명세 확인 필요');
  const version=versions[0],date=version.date.slice(0,4)+'-'+version.date.slice(4,6)+'-'+version.date.slice(6,8);
  const rows=[];let total;
@@ -65,6 +82,7 @@ async function fetchDevelopers(env,request=json){
 }
 function matchState(e,row,decision){
  if(decision?.decision==='rejected')return {status:'rejected',reason:decision.reason};
+ if(inactiveRegistration(row.registration_status))return {status:'inactive',reason:'명부 등록상태: '+row.registration_status+' · 영업 연락처 사용 제외'};
  if(!row.is_current)return {status:'historical',reason:'이전 명부 기록: 최신 정보 재확인 필요'};
  if(decision?.decision==='confirmed')return {status:'confirmed',reason:decision.reason};
  if(nameKey(e.organization)!==row.name_key)return {status:'candidate',reason:'업체명 불일치: 직접 확인 필요'};
@@ -93,13 +111,13 @@ function createDirectorySync({query,transaction,env=process.env,request=json}){
     WHERE source=$1 AND config_revision IS DISTINCT FROM $2 AND (lease_until IS NULL OR lease_until<NOW())`,[source,revision]);
    const token=crypto.randomUUID();const claim=await query(`UPDATE directory_sync_state SET lease_token=$2,lease_until=NOW()+INTERVAL '20 minutes',last_attempt_at=NOW() WHERE source=$1 AND next_due_at<=NOW() AND (lease_until IS NULL OR lease_until<NOW()) RETURNING source`,[source,token]);if(!claim.rows.length)continue;
    try{
-    const raw=await (source==='architects'?fetchArchitects(env,request):fetchDevelopers(env,request));
+    const raw=await (source==='architects'?fetchArchitects(env,request):fetchDevelopers(env,request,source));
     const records=[...new Map(raw.map(row=>{const r=normalizeRecord(row,source);return [r.fingerprint,r];})).values()];
     if(!records.length)throw Error('빈 명부는 반영하지 않습니다.');
     await transaction(async q=>{
      const owner=await q('SELECT source FROM directory_sync_state WHERE source=$1 AND lease_token=$2 AND lease_until>NOW() FOR UPDATE',[source,token]);if(!owner.rows.length)throw Error('명부 갱신 실행권 만료');
-     for(let i=0;i<records.length;i+=1000)await q(`INSERT INTO organization_directory(source,organization,name_key,address,address_key,registration_no,representative,phone,data_date,source_url,fingerprint)
-      SELECT source,organization,name_key,address,address_key,registration_no,representative,phone,data_date,source_url,fingerprint FROM jsonb_to_recordset($1::jsonb) AS r(source TEXT,organization TEXT,name_key TEXT,address TEXT,address_key TEXT,registration_no TEXT,representative TEXT,phone TEXT,data_date TEXT,source_url TEXT,fingerprint TEXT)
+     for(let i=0;i<records.length;i+=1000)await q(`INSERT INTO organization_directory(source,organization,name_key,address,address_key,registration_no,representative,phone,data_date,source_url,fingerprint,registration_status)
+      SELECT source,organization,name_key,address,address_key,registration_no,representative,phone,data_date,source_url,fingerprint,registration_status FROM jsonb_to_recordset($1::jsonb) AS r(source TEXT,organization TEXT,name_key TEXT,address TEXT,address_key TEXT,registration_no TEXT,representative TEXT,phone TEXT,data_date TEXT,source_url TEXT,fingerprint TEXT,registration_status TEXT)
       ON CONFLICT(fingerprint) DO UPDATE SET last_seen_at=NOW()`,[JSON.stringify(records.slice(i,i+1000))]);
      await q('UPDATE organization_directory SET is_current=(fingerprint=ANY($2::text[])) WHERE source=$1',[source,records.map(x=>x.fingerprint)]);
      await q(`UPDATE directory_sync_state SET last_success_at=NOW(),last_error=NULL,record_count=$3,lease_token=NULL,lease_until=NULL,next_due_at=NOW()+INTERVAL '7 days' WHERE source=$1 AND lease_token=$2`,[source,token,records.length]);
@@ -109,4 +127,4 @@ function createDirectorySync({query,transaction,env=process.env,request=json}){
  }
  return {run,start(){if(timer)return;timer=setInterval(()=>void run(),60000);timer.unref?.();void run();}};
 }
-module.exports={SOURCES,nameKey,addressKey,validPhone,normalizeRecord,fetchArchitects,fetchDevelopers,matchState,directoryMatches,createDirectorySync};
+module.exports={SOURCES,coverageSummary,inactiveRegistration,nameKey,addressKey,validPhone,normalizeRecord,fetchArchitects,fetchDevelopers,matchState,directoryMatches,createDirectorySync};

@@ -141,13 +141,14 @@ async function initDb() {
       source_url TEXT NOT NULL,fingerprint TEXT NOT NULL UNIQUE,is_current BOOLEAN NOT NULL DEFAULT FALSE,
       fetched_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
+    ALTER TABLE organization_directory ADD COLUMN IF NOT EXISTS registration_status TEXT;
     CREATE INDEX IF NOT EXISTS idx_directory_name ON organization_directory(name_key) WHERE is_current=TRUE;
     CREATE TABLE IF NOT EXISTS directory_sync_state (
       source TEXT PRIMARY KEY,next_due_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),last_attempt_at TIMESTAMPTZ,last_success_at TIMESTAMPTZ,
       lease_token TEXT,lease_until TIMESTAMPTZ,last_error TEXT,record_count INTEGER NOT NULL DEFAULT 0
     );
     ALTER TABLE directory_sync_state ADD COLUMN IF NOT EXISTS config_revision TEXT;
-    INSERT INTO directory_sync_state(source) VALUES('architects'),('busan_developers') ON CONFLICT DO NOTHING;
+    INSERT INTO directory_sync_state(source) VALUES('architects'),('busan_developers'),('daegu_developers'),('incheon_developers'),('ulsan_developers'),('chungnam_developers') ON CONFLICT DO NOTHING;
     CREATE TABLE IF NOT EXISTS party_contact_decisions (
       id BIGSERIAL PRIMARY KEY,evidence_id BIGINT NOT NULL REFERENCES project_party_evidence(id) ON DELETE CASCADE,
       directory_id BIGINT NOT NULL REFERENCES organization_directory(id),decision TEXT NOT NULL CHECK(decision IN ('confirmed','rejected')),
