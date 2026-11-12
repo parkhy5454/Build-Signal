@@ -679,6 +679,36 @@ app.delete('/api/admin/permits/regions/:id',loadUser,requireAdminRole,async(req,
  catch(e){res.status(500).json({error:'지역 삭제 실패'});}
 });
 
+
+app.get('/api/admin/permits/ingestion-summary',loadUser,requireAdminRole,async(req,res)=>{
+ try{
+  const period=Number(req.query.days||30);
+  if(![7,30,90].includes(period))return res.status(400).json({error:'기간은 7·30·90일 중 선택하세요.'});
+  const jobs=await query(`SELECT
+   COUNT(*)::int AS "jobCount",
+   COUNT(*) FILTER (WHERE status='completed')::int AS "completedJobs",
+   COUNT(*) FILTER (WHERE status='failed')::int AS "failedJobs",
+   COUNT(*) FILTER (WHERE status='partial')::int AS "partialJobs",
+   COUNT(*) FILTER (WHERE status='running')::int AS "runningJobs",
+   COALESCE(SUM(CASE WHEN status IN ('completed','failed','partial') THEN
+    CASE WHEN (job_data->>'received') ~ '^[0-9]+$' THEN (job_data->>'received')::bigint ELSE 0 END ELSE 0 END),0)::text AS "receivedRows",
+   COALESCE(SUM(CASE WHEN status IN ('completed','failed','partial') THEN
+    CASE WHEN (job_data->>'inserted') ~ '^[0-9]+$' THEN (job_data->>'inserted')::bigint ELSE 0 END ELSE 0 END),0)::text AS "insertOperations",
+   COALESCE(SUM(CASE WHEN status IN ('completed','failed','partial') THEN
+    CASE WHEN (job_data->>'updated') ~ '^[0-9]+$' THEN (job_data->>'updated')::bigint ELSE 0 END ELSE 0 END),0)::text AS "updateOperations"
+   FROM permit_ingest_jobs WHERE created_at>=NOW()-($1::int*INTERVAL '1 day')`,[period]);
+  const projects=await query(`SELECT COUNT(*)::int AS "totalPermitProjects",
+   COUNT(*) FILTER (WHERE created_at>=NOW()-($1::int*INTERVAL '1 day'))::int AS "newProjectRows",
+   COUNT(*) FILTER (WHERE updated_at>=NOW()-($1::int*INTERVAL '1 day'))::int AS "recentlyUpdatedRows"
+   FROM projects WHERE source='arch_hub_permit'`,[period]);
+  const failures=await query(`SELECT id,updated_at AS "updatedAt",LEFT(COALESCE(job_data->>'error',''),200) AS error
+   FROM permit_ingest_jobs WHERE status='failed' AND created_at>=NOW()-($1::int*INTERVAL '1 day')
+   ORDER BY updated_at DESC LIMIT 5`,[period]);
+  res.json({days:period,jobs:jobs.rows[0],projects:projects.rows[0],recentFailures:failures.rows,
+   note:'작업별 수신·저장·갱신은 처리 횟수 합계로 중복될 수 있습니다. 신규 현장은 projects 테이블의 생성 시각 기준이며 수집 완료 시각이나 실제 허가일 기준이 아닙니다. 실행 중인 작업은 처리 합계에서 제외합니다.'});
+ }catch(e){res.status(500).json({error:'건축허가 수집 현황 집계 실패'});}
+});
+
 app.get('/api/admin/permits/quality-history',loadUser,requireAdminRole,async(req,res)=>{
  try{
   const history=await query(`SELECT id,status,created_at AS "createdAt",updated_at AS "updatedAt",
