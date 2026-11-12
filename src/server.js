@@ -1150,6 +1150,35 @@ app.patch('/api/permits/leads/:id/followup',loadUser,async(req,res)=>{
 });
 
 
+
+app.get('/api/permits/sales-performance',loadUser,async(req,res)=>{
+ try{
+  const userKey=String(req.user.id);
+  const stats=await query(`SELECT COUNT(*)::int AS total,
+   COUNT(*) FILTER (WHERE sp.status='NEW')::int AS "newLeads",
+   COUNT(*) FILTER (WHERE sp.status='CONTACTED')::int AS contacted,
+   COUNT(*) FILTER (WHERE sp.status='QUALIFIED')::int AS qualified,
+   COUNT(*) FILTER (WHERE sp.status='PROPOSAL')::int AS proposals,
+   COUNT(*) FILTER (WHERE sp.status='WON')::int AS won,
+   COUNT(*) FILTER (WHERE sp.status='LOST')::int AS lost,
+   COUNT(*) FILTER (WHERE sp.status IN ('CONTACTED','QUALIFIED','PROPOSAL','WON','LOST'))::int AS "progressedBeyondNew",
+   COUNT(*) FILTER (WHERE sp.status IN ('WON','LOST'))::int AS "closedDeals"
+   FROM sales_pipeline sp JOIN projects p ON p.id=sp.project_id
+   WHERE sp.user_key=$1 AND p.source='arch_hub_permit'`,[userKey]);
+  const q=stats.rows[0],percent=(num,den)=>den?Math.round(num*1000/den)/10:null;
+  const activities=await query(`SELECT COUNT(*)::int AS total,
+   COUNT(*) FILTER (WHERE a.created_at>=NOW()-INTERVAL '30 days')::int AS "last30Days",
+   COUNT(DISTINCT a.project_id)::int AS "projectsTouched"
+   FROM sales_activities a JOIN projects p ON p.id=a.project_id
+   WHERE a.user_key=$1 AND p.source='arch_hub_permit'`,[userKey]);
+  res.json({counts:q,activity:activities.rows[0],rates:{
+   progressedRate:percent(q.progressedBeyondNew,q.total),
+   winRateAll:percent(q.won,q.total),
+   winRateClosed:percent(q.won,q.closedDeals)
+  },note:'현재 영업 단계의 스냅샷으로 계산한 비율입니다. 단계별 이동 이력이 없으므로 실제 퍼널 전환율이나 기간별 수주율은 아닙니다. 종료 건이 없으면 종료건 수주율은 null입니다.'});
+ }catch(e){res.status(500).json({error:'영업 성과 분석 실패'});}
+});
+
 app.get('/api/permits/sales-overview',loadUser,async(req,res)=>{
  try{
   const userKey=String(req.user.id);
