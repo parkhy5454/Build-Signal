@@ -674,6 +674,24 @@ app.delete('/api/admin/permits/regions/:id',loadUser,requireAdminRole,async(req,
  catch(e){res.status(500).json({error:'지역 삭제 실패'});}
 });
 
+app.get('/api/admin/permits/quality-history',loadUser,requireAdminRole,async(req,res)=>{
+ try{
+  const history=await query(`SELECT id,status,created_at AS "createdAt",updated_at AS "updatedAt",
+    job_data->>'queueId' AS "queueId",job_data->>'batchNumber' AS "batchNumber",
+    job_data->>'error' AS "error",
+    COALESCE(NULLIF(job_data->>'received','')::int,0) AS received,
+    COALESCE(NULLIF(job_data->>'inserted','')::int,0) AS inserted,
+    COALESCE(NULLIF(job_data->>'updated','')::int,0) AS updated
+    FROM permit_ingest_jobs ORDER BY id DESC LIMIT 30`);
+  const quality=await query(`SELECT COUNT(*)::int AS total,
+    COUNT(*) FILTER (WHERE permit_date IS NULL)::int AS "missingPermitDate",
+    COUNT(*) FILTER (WHERE address IS NULL OR BTRIM(address)='')::int AS "missingAddress",
+    COUNT(*) FILTER (WHERE area_sqm IS NULL OR area_sqm<=0)::int AS "missingArea"
+    FROM projects WHERE source='arch_hub_permit'`);
+  res.json({history:history.rows,quality:quality.rows[0],
+   note:'수집 이력은 작업별 처리량이고 품질 집계는 현재 DB 전체의 스냅샷입니다.'});
+ }catch(e){res.status(500).json({error:'수집 이력 및 품질 조회 실패'});}
+});
 app.get('/api/admin/permits/history',loadUser,requireAdminRole,async(req,res)=>{try{const result=await query("SELECT id,status,job_data,created_at,updated_at FROM permit_ingest_jobs ORDER BY id DESC LIMIT 30");res.json({jobs:result.rows});}catch(e){res.status(500).json({error:e.message});}});
 app.get('/api/admin/permits/progress',loadUser,requireAdminRole,(req,res)=>res.json({job:permitJob}));
 
