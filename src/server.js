@@ -1159,6 +1159,28 @@ app.patch('/api/permits/leads/:id/followup',loadUser,async(req,res)=>{
 
 
 
+
+app.get('/api/admin/permits/team-outcomes-period',loadUser,requireAdminRole,async(req,res)=>{
+ try{
+  const days=Number.parseInt(req.query.days,10)||30;
+  if(![7,30,90].includes(days))return res.status(400).json({error:'기간은 7, 30, 90일 중 선택하세요.'});
+  const rows=await query(`WITH events AS (
+   SELECT h.user_key,h.project_id,h.to_status
+   FROM sales_stage_history h JOIN projects p ON p.id=h.project_id
+   WHERE p.source='arch_hub_permit' AND h.changed_at>=NOW()-($1::int*INTERVAL '1 day')
+   AND h.to_status IN ('PROPOSAL','WON','LOST') AND h.from_status IS DISTINCT FROM h.to_status
+  )
+  SELECT user_key AS "userKey",
+   COUNT(*) FILTER (WHERE to_status='PROPOSAL')::int AS "proposalEntries",
+   COUNT(*) FILTER (WHERE to_status='WON')::int AS "wonEntries",
+   COUNT(*) FILTER (WHERE to_status='LOST')::int AS "lostEntries",
+   COUNT(DISTINCT project_id) FILTER (WHERE to_status='WON')::int AS "uniqueWonProjects"
+  FROM events GROUP BY user_key ORDER BY "wonEntries" DESC,"proposalEntries" DESC,user_key ASC LIMIT 200`,[days]);
+  res.json({days,members:rows.rows,limit:200,
+   note:'단계 변경 이력 기능 도입 이후 기록된 이벤트만 포함합니다. 재진입한 현장은 WON 진입 횟수가 중복될 수 있으며, uniqueWonProjects는 중복 제거 수치입니다. 활동과 수주 사이의 인과관계나 전환율을 의미하지 않습니다.'});
+ }catch(e){res.status(500).json({error:'담당자 기간별 단계 변경 현황 조회 실패'});}
+});
+
 app.get('/api/admin/permits/team-activity-period',loadUser,requireAdminRole,async(req,res)=>{
  try{
   const days=Number.parseInt(req.query.days,10)||30;
