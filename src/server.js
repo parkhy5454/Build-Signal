@@ -60,17 +60,42 @@ function classifyBid(title) {
   return "건설공사";
 }
 function parseG2bItems(payload) {
-  const body = payload?.response || payload?.Response || payload;
+  const body = payload?.response || payload?.Response || payload?.data?.response || payload?.data?.Response || payload;
   const header = body?.header || body?.Header;
   const resultCode = String(header?.resultCode ?? header?.RESULTCODE ?? "00");
   const resultMsg = String(header?.resultMsg ?? header?.RESULTMSG ?? "");
   if (resultCode !== "00" && resultCode !== "0") {
     throw new Error(`나라장터 API 오류(${resultCode}): ${resultMsg || "응답 오류"}`);
   }
-  const raw = body?.body || body?.Body || {};
-  const items = raw?.items?.item ?? raw?.items?.Item ?? raw?.items ?? [];
-  if (Array.isArray(items)) return items;
-  return items ? [items] : [];
+  const raw = body?.body || body?.Body || payload?.body || payload?.Body || {};
+  const candidates = [
+    raw?.items?.item, raw?.items?.Item, raw?.items,
+    raw?.Items?.item, raw?.Items?.Item, raw?.Items,
+    body?.items?.item, body?.items?.Item, body?.items,
+    payload?.items?.item, payload?.items?.Item, payload?.items
+  ];
+  for (const candidate of candidates) {
+    if (Array.isArray(candidate)) return candidate;
+    if (candidate && typeof candidate === "object") {
+      if (Array.isArray(candidate.item)) return candidate.item;
+      if (Array.isArray(candidate.Item)) return candidate.Item;
+      if (candidate.item && typeof candidate.item === "object") return [candidate.item];
+      if (candidate.Item && typeof candidate.Item === "object") return [candidate.Item];
+    }
+  }
+  return [];
+}
+function getG2bResponseDiagnostics(payload) {
+  const root = payload?.response || payload?.Response || payload?.data?.response || payload?.data?.Response || payload;
+  const body = root?.body || root?.Body || payload?.body || payload?.Body || {};
+  const header = root?.header || root?.Header || {};
+  return {
+    resultCode: header?.resultCode ?? header?.RESULTCODE ?? null,
+    resultMsg: header?.resultMsg ?? header?.RESULTMSG ?? null,
+    totalCount: body?.totalCount ?? body?.TotalCount ?? body?.total_count ?? null,
+    rootKeys: Object.keys(root || {}).slice(0, 20),
+    bodyKeys: Object.keys(body || {}).slice(0, 20)
+  };
 }
 
 
@@ -159,6 +184,16 @@ app.post("/api/admin/g2b/sync", loadUser, requireAdminRole, async (req, res) => 
     try { payload = JSON.parse(rawText); }
     catch { throw new Error(`나라장터 응답을 JSON으로 해석하지 못했습니다. 응답 앞부분: ${rawText.slice(0,180)}`); }
     const items = parseG2bItems(payload);
+    const diagnostics = getG2bResponseDiagnostics(payload);
+    if (items.length === 0) {
+      const total = diagnostics.totalCount;
+      const hint = total !== null && Number(total) > 0
+        ? `API는 총 ${total}건을 반환했지만 항목 배열을 읽지 못했습니다. 응답 구조를 확인해야 합니다.`
+        : `API 응답에서 공고 항목이 확인되지 않았습니다. resultCode=${diagnostics.resultCode ?? "없음"}, totalCount=${total ?? "없음"}, rootKeys=${diagnostics.rootKeys.join(",")}, bodyKeys=${diagnostics.bodyKeys.join(",")}`;
+      await query("INSERT INTO ingest_logs(source,received_count,inserted_count,status,message) VALUES($1,0,0,'ERROR',$2)",
+        ["g2b_bid", hint.slice(0,1000)]);
+      return res.status(502).json({ error: hint, diagnostics, range: { from: fmt(start), to: fmt(end) } });
+    }
     let inserted = 0, updated = 0, skipped = 0;
     for (const item of items) {
       const bidNo = firstValue(item, ["bidNtceNo","BIDNTCENO"]);
