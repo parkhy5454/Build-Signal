@@ -4,10 +4,15 @@ const {municipalitiesForProvince}=require('./region-catalog');
 const ORIGIN='https://seoulboard.seoul.go.kr',BOARD='14637';
 const clean=v=>String(v??'').normalize('NFKC').replace(/\s+/g,' ').trim();
 const digest=v=>crypto.createHash('sha256').update(v).digest('hex');
-function listPosts(d){
- if(d.listAuthorCheck!==true||String(d.bbsSettingVO?.bbsNo)!==BOARD||!Array.isArray(d.listVO?.listObject)||Number(d.listVO.curPage)!==1)throw Error('서울 건축심의 공개목록 명세·권한 변경');
- return d.listVO.listObject.filter(r=>r.secretAt==='N').map(r=>{if(String(r.bbsNo)!==BOARD||(!Number.isSafeInteger(Number(r.nttNo))||Number(r.nttNo)<=0))throw Error('서울 심의 게시물 식별정보 변경');return Number(r.nttNo);}).slice(0,10);
+function parsePage(d,page=1){
+ const v=d.listVO,total=Number(v?.totalCount),pages=Math.max(1,Math.ceil(total/10));
+ if(d.listAuthorCheck!==true||String(d.bbsSettingVO?.bbsNo)!==BOARD||!Array.isArray(v?.listObject)||Number(v.curPage)!==page||!Number.isSafeInteger(total)||total<0||pages>10000||Number(v.cntPerPage)!==10||Number(v.totalPage)!==Math.ceil(total/10))throw Error('서울 건축심의 공개목록 명세·권한·페이지 변경');
+ if(v.listObject.length!==Math.min(10,Math.max(0,total-(page-1)*10)))throw Error('서울 심의 목록 페이지 누락');
+ const all=v.listObject.map(r=>{if(String(r.bbsNo)!==BOARD||!Number.isSafeInteger(Number(r.nttNo))||Number(r.nttNo)<=0||!['N','Y'].includes(r.secretAt))throw Error('서울 심의 게시물 식별정보 변경');return Number(r.nttNo);});
+ if(new Set(all).size!==all.length)throw Error('서울 심의 목록 게시물 중복');
+ return {ids:v.listObject.filter(r=>r.secretAt==='N').map(r=>Number(r.nttNo)),total,pages};
 }
+function listPosts(d,page=1){return parsePage(d,page).ids;}
 function postFiles(d,id){
  const r=d.bbsTypeVO,rights=d.bbsSettingVO?.nmbrAuthor;
  if(!r||String(r.bbsNo)!==BOARD||Number(r.nttNo)!==id||r.secretAt!=='N'||r.deleteAt!=='N'||!Array.isArray(rights)||!rights.includes('_view')||!rights.includes('_dwld'))throw Error('서울 심의 게시물 비공개·권한 또는 식별정보 변경');
@@ -64,20 +69,36 @@ function createSeoulCollector({query,transaction,env=process.env,load=download,p
    const fetchBytes=async url=>{if(Date.now()>deadline)throw Error('서울 심의 실행시간 한도');const n=await query(`UPDATE auto_ingest_state SET daily_calls=CASE WHEN call_day=(NOW() AT TIME ZONE 'Asia/Seoul')::date THEN daily_calls+1 ELSE 1 END,call_day=(NOW() AT TIME ZONE 'Asia/Seoul')::date WHERE source='seoul_review' AND lease_token=$1 AND lease_until>NOW() AND (call_day IS DISTINCT FROM (NOW() AT TIME ZONE 'Asia/Seoul')::date OR daily_calls<100) RETURNING source`,[token]);if(!n.rows.length)throw Error('서울 심의 호출 한도 또는 실행권 만료');return load(url);};
    const json=async url=>{try{return JSON.parse((await fetchBytes(url)).toString('utf8'));}catch(e){if(e instanceof SyntaxError)throw Error('서울 공개 JSON 응답 변경');throw e;}};
    let processed=0,failed=0,discovered=false;
-   const due=await query('SELECT next_discovery_at<=NOW() AS due FROM seoul_review_state WHERE id=1');
-   if(due.rows[0]?.due){
+   const queuePage=async(page,latest)=>{
+    const data=parsePage(await json(ORIGIN+'/front/bbs.json?bbsNo='+BOARD+'&curPage='+page+'&cntPerPage=10'),page);
+    await transaction(async q=>{
+     const owner=await q("SELECT source FROM auto_ingest_state WHERE source='seoul_review' AND lease_token=$1 AND lease_until>NOW() FOR UPDATE",[token]);if(!owner.rows.length)throw Error('서울 심의 수집 실행권 만료');
+     for(const id of data.ids)await q(`INSERT INTO seoul_review_posts(post_id) VALUES($1) ON CONFLICT(post_id) DO UPDATE SET next_due_at=CASE WHEN $2 THEN LEAST(seoul_review_posts.next_due_at,NOW()) ELSE seoul_review_posts.next_due_at END`,[id,latest]);
+     if(latest)await q("UPDATE seoul_review_state SET next_discovery_at=NOW()+INTERVAL '24 hours',archive_total=$1 WHERE id=1",[data.total]);
+     else await q(`UPDATE seoul_review_state SET archive_page=$1,archive_total=$2,next_archive_at=NOW()+($3::int*INTERVAL '1 second'),archive_completed_at=CASE WHEN $4 THEN NOW() ELSE archive_completed_at END WHERE id=1`,[page>=data.pages?2:page+1,data.total,page>=data.pages?604800:60,page>=data.pages]);
+    });discovered=true;
+   };
+   const state=(await query('SELECT *,next_discovery_at<=NOW() AS due,next_archive_at<=NOW() AS archive_due FROM seoul_review_state WHERE id=1')).rows[0];
+   if(state?.due){try{await queuePage(1,true);}catch(e){failed++;await query("UPDATE seoul_review_state SET next_discovery_at=NOW()+INTERVAL '2 hours' WHERE id=1");}}
+   const backlog=(await query("SELECT (SELECT COUNT(*) FROM seoul_review_posts WHERE status='pending')::int posts,(SELECT COUNT(*) FROM seoul_review_files WHERE status='pending')::int files")).rows[0];
+   if(state?.archive_due&&backlog.posts<20&&backlog.files<50){try{await queuePage(state.archive_page,false);}catch(e){failed++;await query("UPDATE seoul_review_state SET next_archive_at=NOW()+INTERVAL '2 hours' WHERE id=1");}}
+   const posts=await query("SELECT * FROM seoul_review_posts WHERE next_due_at<=NOW() ORDER BY CASE status WHEN 'pending' THEN 0 WHEN 'error' THEN 1 ELSE 2 END,post_id DESC LIMIT 10");
+   for(const row of posts.rows){const id=Number(row.post_id),postUrl='https://news.seoul.go.kr/citybuild/architecture-committee-result#view/'+id;
     try{
-     const ids=listPosts(await json(ORIGIN+'/front/bbs.json?bbsNo='+BOARD+'&curPage=1&cntPerPage=10'));
-     let discoveryFailures=0;
-     for(const id of ids){try{for(const file of postFiles(await json(ORIGIN+'/front/'+id+'/bbs.json?bbsNo='+BOARD+'&nttNo='+id),id)){
-      await query(`INSERT INTO seoul_review_files(url,post_id,file_no,original_name,post_url,revision) VALUES($1,$2,$3,$4,$5,$6)
+     const files=postFiles(await json(ORIGIN+'/front/'+id+'/bbs.json?bbsNo='+BOARD+'&nttNo='+id),id);
+     await transaction(async q=>{
+      const owner=await q("SELECT source FROM auto_ingest_state WHERE source='seoul_review' AND lease_token=$1 AND lease_until>NOW() FOR UPDATE",[token]);if(!owner.rows.length)throw Error('서울 심의 수집 실행권 만료');
+      for(const file of files)await q(`INSERT INTO seoul_review_files(url,post_id,file_no,original_name,post_url,revision) VALUES($1,$2,$3,$4,$5,$6)
        ON CONFLICT(url) DO UPDATE SET original_name=EXCLUDED.original_name,revision=EXCLUDED.revision,
        status=CASE WHEN seoul_review_files.revision<>EXCLUDED.revision THEN 'pending' ELSE seoul_review_files.status END,
        next_due_at=CASE WHEN seoul_review_files.revision<>EXCLUDED.revision THEN NOW() ELSE seoul_review_files.next_due_at END`,[file.url,file.postId,file.fileNo,file.name,file.postUrl,file.revision]);
-     }}catch(e){discoveryFailures++;await query(`INSERT INTO early_source_documents(url,title,last_error,last_checked_at) VALUES($1,$2,$3,NOW()) ON CONFLICT(url) DO UPDATE SET last_error=EXCLUDED.last_error,last_checked_at=NOW()`,['https://news.seoul.go.kr/citybuild/architecture-committee-result#view/'+id,'서울시 건축위원회 게시물',String(e.message).slice(0,250)]);}}
-     failed+=discoveryFailures;
-     await query("UPDATE seoul_review_state SET next_discovery_at=NOW()+($1::int*INTERVAL '1 hour') WHERE id=1",[discoveryFailures?2:24]);discovered=true;
-    }catch{failed++;await query("UPDATE seoul_review_state SET next_discovery_at=NOW()+INTERVAL '2 hours' WHERE id=1");}
+      await q("UPDATE seoul_review_posts SET status='processed',supported_files=$2,last_error=NULL,last_checked_at=NOW(),next_due_at=NOW()+INTERVAL '30 days' WHERE post_id=$1",[id,files.length]);
+      await q('UPDATE early_source_documents SET last_error=NULL,last_checked_at=NOW() WHERE url=$1',[postUrl]);
+     });
+    }catch(e){failed++;if(/한도|실행권/.test(e.message))break;
+     await query("UPDATE seoul_review_posts SET status='error',last_error=$2,next_due_at=NOW()+INTERVAL '2 days' WHERE post_id=$1",[id,String(e.message).slice(0,250)]);
+     await query(`INSERT INTO early_source_documents(url,title,last_error,last_checked_at) VALUES($1,'서울시 건축위원회 게시물',$2,NOW()) ON CONFLICT(url) DO UPDATE SET last_error=EXCLUDED.last_error,last_checked_at=NOW()`,[postUrl,String(e.message).slice(0,250)]);
+    }
    }
    const fileError=async(row,e)=>{await query("UPDATE seoul_review_files SET status='error',last_error=$2,next_due_at=NOW()+INTERVAL '2 days' WHERE url=$1",[row.url,String(e.message).slice(0,250)]);await query(`INSERT INTO early_source_documents(url,title,last_error,last_checked_at) VALUES($1,$2,$3,NOW()) ON CONFLICT(url) DO UPDATE SET last_error=EXCLUDED.last_error,last_checked_at=NOW()`,[row.url,row.original_name,String(e.message).slice(0,250)]);};
    const files=await query("SELECT * FROM seoul_review_files WHERE next_due_at<=NOW() ORDER BY CASE status WHEN 'pending' THEN 0 WHEN 'error' THEN 1 ELSE 2 END,next_due_at,post_id DESC,file_no LIMIT 10");
@@ -86,11 +107,11 @@ function createSeoulCollector({query,transaction,env=process.env,load=download,p
     try{const file={url:row.url,name:row.original_name,postId:Number(row.post_id),fileNo:row.file_no,postUrl:row.post_url,revision:row.revision};await saveDecision(transaction,parseDecision(await pdfText(bytes),file),token);processed++;}
     catch(e){failed++;await fileError(row,e);}
    }
-   const pending=await query("SELECT COUNT(*) FILTER (WHERE next_due_at<=NOW())::int AS n,COUNT(*) FILTER (WHERE status='error')::int AS errors FROM seoul_review_files");
+   const pending=await query("SELECT (COUNT(*) FILTER (WHERE next_due_at<=NOW())+(SELECT COUNT(*) FROM seoul_review_posts WHERE next_due_at<=NOW()))::int AS n,(COUNT(*) FILTER (WHERE status='error')+(SELECT COUNT(*) FROM seoul_review_posts WHERE status='error'))::int AS errors FROM seoul_review_files");
    await query(`UPDATE auto_ingest_state SET last_success_at=CASE WHEN $2 THEN NOW() ELSE last_success_at END,last_error=$3,lease_token=NULL,lease_until=NULL,
-    next_due_at=NOW()+($4::int*INTERVAL '1 second') WHERE source='seoul_review' AND lease_token=$1`,[token,discovered||processed>0,failed||pending.rows[0]?.errors?'서울 심의 처리 실패 '+failed+'건 / 오류 파일 '+(pending.rows[0]?.errors||0)+'건 · 자동 재시도':null,failed?7200:pending.rows[0]?.n?60:3600]);
+    next_due_at=NOW()+($4::int*INTERVAL '1 second') WHERE source='seoul_review' AND lease_token=$1`,[token,discovered||processed>0,failed||pending.rows[0]?.errors?'서울 심의 처리 실패 '+failed+'건 / 오류 항목 '+(pending.rows[0]?.errors||0)+'건 · 자동 재시도':null,failed?7200:pending.rows[0]?.n?60:3600]);
   }catch(e){if(claimed)await query("UPDATE auto_ingest_state SET last_error=$2,lease_token=NULL,lease_until=NULL,next_due_at=NOW()+INTERVAL '2 hours' WHERE source='seoul_review' AND lease_token=$1",[token,String(e.message).slice(0,250)]).catch(()=>{});}finally{active=false;}
  }
  return {run,start(){if(timer)return;timer=setInterval(()=>void run(),60000);timer.unref?.();void run();}};
 }
-module.exports={BOARD,ORIGIN,listPosts,postFiles,parseDecision,download,extract,saveDecision,createSeoulCollector};
+module.exports={BOARD,ORIGIN,parsePage,listPosts,postFiles,parseDecision,download,extract,saveDecision,createSeoulCollector};

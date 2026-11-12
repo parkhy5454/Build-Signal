@@ -1884,7 +1884,14 @@ app.get('/api/ingestion/freshness',async(req,res)=>{
    COUNT(*) FILTER (WHERE enabled AND last_cycle_at IS NOT NULL)::int AS completed_regions,
    MIN(last_cycle_at) FILTER (WHERE enabled) AS oldest_cycle,
    COUNT(*) FILTER (WHERE enabled AND last_error IS NOT NULL)::int AS failed_regions FROM auto_permit_regions`);
-  res.json({enabled:automaticIngest.enabled(),configured:{permits:!!process.env.ARCH_HUB_SERVICE_KEY,bids:!!process.env.G2B_SERVICE_KEY,early:true,environment_review:true,seoul_review:true},sources:states.rows,coverage:coverage.rows[0],catalogDate:regionCatalogMeta.retrievedOn,
+  const seoulReview=await query(`SELECT s.archive_page,s.archive_total,s.archive_completed_at,
+   (SELECT COUNT(*)::int FROM seoul_review_posts) AS discovered_posts,
+   (SELECT COUNT(*)::int FROM seoul_review_posts WHERE status='processed') AS checked_posts,
+   (SELECT COUNT(*)::int FROM seoul_review_posts WHERE status='processed' AND supported_files=0) AS unsupported_posts,
+   (SELECT COUNT(*)::int FROM seoul_review_files WHERE status='processed') AS processed_files,
+   (SELECT COUNT(*)::int FROM seoul_review_files WHERE status='error') AS failed_files
+   FROM seoul_review_state s WHERE id=1`);
+  res.json({enabled:automaticIngest.enabled(),configured:{permits:!!process.env.ARCH_HUB_SERVICE_KEY,bids:!!process.env.G2B_SERVICE_KEY,early:true,environment_review:true,seoul_review:true},sources:states.rows,coverage:coverage.rows[0],seoulReview:seoulReview.rows[0],catalogDate:regionCatalogMeta.retrievedOn,
    note:'국토부는 내장된 전국 공식 지역코드로 순회 적재합니다. 지역 선택은 저장된 자료를 필터링하며, 지역별 수집 완료를 의미하지 않습니다. 처리량과 원천 반영 주기에 따라 지연될 수 있습니다.'});
  }catch{res.status(500).json({error:'자동 수집 현황 조회 실패'});}
 });

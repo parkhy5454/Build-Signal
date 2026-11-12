@@ -161,6 +161,7 @@ async function loadAutomaticFreshness(){
    const running=row.lease_until&&new Date(row.lease_until)>new Date();
    parts.push(label+': '+(!d.configured[row.source]?'인증키 설정 필요':running?'수집 중':row.last_error?'재시도 대기':'예약 대기')+' / 마지막 처리 성공 '+time(row.last_success_at));
   }
+  if(d.seoulReview)parts.push('서울 심의 게시물 발견 '+fmt(d.seoulReview.discovered_posts)+'건 / 첨부 확인 '+fmt(d.seoulReview.checked_posts)+'건 / 지원 PDF 처리 '+fmt(d.seoulReview.processed_files)+'건 / 미지원 첨부 게시물 '+fmt(d.seoulReview.unsupported_posts)+'건 / PDF 오류 '+fmt(d.seoulReview.failed_files)+'건');
   parts.push('국토부 자동 수집 대상 '+fmt(d.coverage.regions)+'개 지역 / 전체 페이지 순회 완료 '+fmt(d.coverage.completed_regions)+'개');
   parts.push('전국 자료를 순차 적재 중입니다. 지역 선택은 저장된 자료를 검색하며, 미수집 지역은 아직 결과가 없을 수 있습니다.');
   out.textContent=parts.join(' · ');
