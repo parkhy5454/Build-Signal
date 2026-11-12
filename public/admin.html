@@ -584,15 +584,16 @@ document.getElementById('permitRegionalLeadsLoad').addEventListener('click',asyn
   for(const x of d.rows){
    const label=document.createElement('label');label.style.display='block';
    const checkbox=document.createElement('input');checkbox.type='checkbox';checkbox.value=String(x.id);checkbox.className='permit-regional-bulk';
-   label.appendChild(checkbox);label.appendChild(document.createTextNode(' #'+x.id+' / '+x.score+'점 / '+String(x.name||'현장명 없음').slice(0,65)));
+   if(x.pipelineStatus){checkbox.disabled=true;checkbox.title='이미 영업 등록됨: '+x.pipelineStatus;}
+   label.appendChild(checkbox);label.appendChild(document.createTextNode(' #'+x.id+' / '+x.score+'점 / '+String(x.name||'현장명 없음').slice(0,65)+' / '+(x.pipelineStatus?'등록됨 ('+x.pipelineStatus+')':'미등록')));
    bulk.appendChild(label);
   }
   document.getElementById('permitRegionalBulkOutput').textContent='';
   const leadSelect=document.getElementById('permitRegionalLeadSelect');leadSelect.replaceChildren();
   const placeholder=document.createElement('option');placeholder.value='';placeholder.textContent='현장 선택';leadSelect.appendChild(placeholder);
-  for(const x of d.rows){const option=document.createElement('option');option.value=String(x.id);option.textContent='#'+x.id+' / '+x.score+'점 / '+String(x.name||'현장명 없음').slice(0,65);leadSelect.appendChild(option);}
+  for(const x of d.rows){const option=document.createElement('option');option.value=String(x.id);option.textContent='#'+x.id+' / '+x.score+'점 / '+String(x.name||'현장명 없음').slice(0,65)+' / '+(x.pipelineStatus?'등록됨 ('+x.pipelineStatus+')':'미등록');leadSelect.appendChild(option);}
   const lines=['[지역별 우선 영업 현장]','지역: '+d.region+' / 업종: '+d.profile+' / 분석 현장: '+d.scanned+'건',''];
-  for(const x of d.rows)lines.push('현장 #'+x.id+' / 점수 '+x.score+' / '+x.name+' / '+(x.address||'주소 없음')+' / '+(x.stage||'단계 미확인')+' / '+x.reasons.join(', '));
+  for(const x of d.rows)lines.push('현장 #'+x.id+' / 점수 '+x.score+' / '+x.name+' / '+(x.address||'주소 없음')+' / '+(x.stage||'단계 미확인')+' / '+(x.pipelineStatus?'영업 등록됨 ('+x.pipelineStatus+')':'영업 미등록')+' / '+x.reasons.join(', '));
   if(!d.rows.length)lines.push('조회된 현장이 없습니다.');
   lines.push('',d.note);out.textContent=lines.join('\n');
  }catch(e){out.textContent=e.message;}
