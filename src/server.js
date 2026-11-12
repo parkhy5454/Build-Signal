@@ -460,6 +460,28 @@ app.get('/api/project-groups/:id',async(req,res)=>{
   res.json({...g.rows[0],notices:notices.rows,contacts:contacts.rows});
  }catch(e){res.status(500).json({error:e.message});}
 });
+// Read-only monitoring: does not regroup or mutate existing notices.
+app.get('/api/admin/project-groups/health',loadUser,requireAdminRole,async(req,res)=>{
+ try{
+  const summary=await query(`SELECT
+    (SELECT COUNT(*)::int FROM projects WHERE source='g2b_bid') AS total_notices,
+    (SELECT COUNT(*)::int FROM project_groups) AS total_groups,
+    (SELECT COUNT(*)::int FROM projects WHERE source='g2b_bid' AND project_group_id IS NOT NULL) AS linked_notices,
+    (SELECT COUNT(*)::int FROM projects WHERE source='g2b_bid' AND project_group_id IS NULL) AS unlinked_notices,
+    (SELECT COUNT(*)::int FROM project_groups g WHERE EXISTS(SELECT 1 FROM projects p WHERE p.project_group_id=g.id)) AS active_groups`);
+  const recent=await query(`SELECT id,name,owner,region,address,updated_at
+    FROM projects WHERE source='g2b_bid' AND project_group_id IS NULL
+    ORDER BY updated_at DESC NULLS LAST,id DESC LIMIT 40`);
+  const candidates=recent.rows.map(p=>{
+    const identity=projectGroupIdentity({...p,source:'g2b_bid'});
+    return {id:p.id,name:p.name,owner:p.owner,region:p.region,updated_at:p.updated_at,
+      matchable:!!identity,reason:identity?'통합 규칙 충족 (아직 연결되지 않음)':'보수적 매칭 기준 미충족'};
+  });
+  res.json({summary:summary.rows[0],recent_unlinked:candidates,
+    note:'통합 기준은 공고명 말미 공종, 발주처, 지역 및 위치 일치입니다. 이 화면은 읽기 전용입니다.'});
+ }catch(e){res.status(500).json({error:e.message});}
+});
+
 app.post('/api/admin/project-groups/backfill',loadUser,requireAdminRole,async(req,res)=>{
  try{
   const limit=Math.min(500,Math.max(1,parseInt(req.body?.limit,10)||200));
