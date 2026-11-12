@@ -119,6 +119,16 @@ async function initDb() {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       UNIQUE(project_id, user_key)
     );
+    ALTER TABLE sales_pipeline ADD COLUMN IF NOT EXISTS next_contact_date DATE;
+    CREATE TABLE IF NOT EXISTS sales_activities (
+      id BIGSERIAL PRIMARY KEY,
+      project_id BIGINT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      user_key TEXT NOT NULL,
+      activity_type TEXT NOT NULL,
+      detail TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_sales_activities_user_project ON sales_activities(user_key,project_id,created_at DESC);
     CREATE TABLE IF NOT EXISTS project_contacts (
       id BIGSERIAL PRIMARY KEY,
       project_id BIGINT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
