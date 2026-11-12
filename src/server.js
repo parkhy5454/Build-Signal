@@ -449,6 +449,39 @@ app.post('/api/admin/permits/sync',loadUser,requireAdminRole,(req,res)=>{
 });
 app.get('/api/admin/permits/progress',loadUser,requireAdminRole,(req,res)=>res.json({job:permitJob}));
 
+app.post('/api/admin/permits/windowed',loadUser,requireAdminRole,(req,res)=>{
+ if(!process.env.ARCH_HUB_SERVICE_KEY)return res.status(400).json({error:'ARCH_HUB_SERVICE_KEY 미설정'});
+ if(permitJob?.status==='running')return res.status(409).json({error:'이미 수집 중입니다.'});
+ const {regions,startDate,endDate}=req.body||{};
+ if(!Array.isArray(regions)||regions.length<1||regions.length>20)return res.status(400).json({error:'지역은 1~20개까지 지정하세요.'});
+ const unique=[...new Map(regions.map(r=>({sigunguCd:String(r?.sigunguCd||''),bjdongCd:String(r?.bjdongCd||'')})).map(r=>[r.sigunguCd+':'+r.bjdongCd,r])).values()];
+ if(unique.some(r=>!/^\d{5}$/.test(r.sigunguCd)||!/^\d{5}$/.test(r.bjdongCd)))return res.status(400).json({error:'지역코드는 5자리 숫자여야 합니다.'});
+ if(!permitDate(startDate)||!permitDate(endDate)||startDate>endDate)return res.status(400).json({error:'날짜는 YYYYMMDD 형식이어야 합니다.'});
+ const start=Date.parse(permitDate(startDate)),end=Date.parse(permitDate(endDate));
+ if(end-start>365*86400000)return res.status(400).json({error:'한 번에 최대 1년까지만 조회할 수 있습니다.'});
+ const windows=[];
+ for(let from=start;from<=end;from+=30*86400000){
+  const to=Math.min(from+29*86400000,end);
+  const compact=t=>new Date(t).toISOString().slice(0,10).replace(/-/g,'');
+  windows.push({startDate:compact(from),endDate:compact(to)});
+ }
+ permitJob={status:'running',received:0,inserted:0,updated:0,skipped:0,pages:0,completedWindows:0,totalWindows:windows.length*unique.length,errors:[],startedAt:new Date().toISOString()};
+ const job=permitJob;
+ void (async()=>{
+  for(const region of unique)for(const window of windows){
+   const child={status:'running',received:0,inserted:0,updated:0,skipped:0,pages:0,total:0};
+   await permitSync(child,{...region,...window});
+   for(const k of ['received','inserted','updated','skipped','pages'])job[k]+=child[k];
+   job.completedWindows++;
+   if(child.status!=='completed')job.errors.push(region.sigunguCd+'/'+region.bjdongCd+' '+window.startDate+'~'+window.endDate+': '+(child.error||'오류'));
+  }
+  job.status=job.errors.length?(job.errors.length===job.totalWindows?'failed':'partial'):'completed';
+  job.finishedAt=new Date().toISOString();
+ })().catch(e=>{job.status='failed';job.error=String(e.message).slice(0,200);job.finishedAt=new Date().toISOString();});
+ res.status(202).json({job});
+});
+
+
 app.post('/api/admin/permits/batch',loadUser,requireAdminRole,(req,res)=>{
  if(!process.env.ARCH_HUB_SERVICE_KEY)return res.status(400).json({error:'ARCH_HUB_SERVICE_KEY 미설정'});
  if(permitJob?.status==='running')return res.status(409).json({error:'이미 수집 중입니다.'});
