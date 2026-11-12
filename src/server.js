@@ -1153,6 +1153,35 @@ app.patch('/api/permits/leads/:id/followup',loadUser,async(req,res)=>{
 
 
 
+
+app.get('/api/permits/sales-stagnation',loadUser,async(req,res)=>{
+ try{
+  const days=Number.parseInt(req.query.days,10)||14;
+  if(![7,14,30,60,90].includes(days))return res.status(400).json({error:'정체 기준은 7, 14, 30, 60, 90일 중 선택하세요.'});
+  const limit=Math.min(100,Math.max(1,Number.parseInt(req.query.limit,10)||50));
+  const userKey=String(req.user.id);
+  const base=`FROM sales_pipeline sp JOIN projects p ON p.id=sp.project_id
+   LEFT JOIN LATERAL (
+    SELECT h.changed_at FROM sales_stage_history h
+    WHERE h.project_id=sp.project_id AND h.user_key=sp.user_key AND h.to_status=sp.status
+    ORDER BY h.changed_at DESC,h.id DESC LIMIT 1
+   ) last_stage ON TRUE
+   WHERE sp.user_key=$1 AND p.source='arch_hub_permit'
+   AND sp.status NOT IN ('WON','LOST') AND last_stage.changed_at IS NOT NULL`;
+  const summary=await query(`SELECT COUNT(*)::int AS "trackedOpen",
+   COUNT(*) FILTER (WHERE last_stage.changed_at <= NOW()-($2::int*INTERVAL '1 day'))::int AS stagnant
+   ${base}`,[userKey,days]);
+  const rows=await query(`SELECT p.id,p.name,p.region,sp.status,sp.priority,
+   last_stage.changed_at AS "stageEnteredAt",
+   FLOOR(EXTRACT(EPOCH FROM (NOW()-last_stage.changed_at))/86400)::int AS "daysInStage"
+   ${base} AND last_stage.changed_at <= NOW()-($2::int*INTERVAL '1 day')
+   ORDER BY last_stage.changed_at ASC,CASE sp.priority WHEN 'HIGH' THEN 0 WHEN 'NORMAL' THEN 1 ELSE 2 END ASC,p.id DESC LIMIT $3`,
+   [userKey,days,limit]);
+  res.json({days,summary:summary.rows[0],rows:rows.rows,limit,
+   note:'단계 체류 기간은 변경 이력에 기록된 가장 최근 현재 단계 진입 시각 기준입니다. 변경 이력 기능 도입 이전부터 유지된 단계는 계산에서 제외됩니다. 영업 활동이 없어도 단계 변경이 없다면 정체로 분류됩니다.'});
+ }catch(e){res.status(500).json({error:'영업 정체 현장 분석 실패'});}
+});
+
 app.get('/api/permits/sales-conversions',loadUser,async(req,res)=>{
  try{
   const days=Number.parseInt(req.query.days,10)||30;
