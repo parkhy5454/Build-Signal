@@ -674,6 +674,1467 @@ app.delete('/api/admin/permits/regions/:id',loadUser,requireAdminRole,async(req,
  catch(e){res.status(500).json({error:'지역 삭제 실패'});}
 });
 
+
+app.get('/api/admin/permits/quality-history',loadUser,requireAdminRole,async(req,res)=>{
+ try{
+  const history=await query(`SELECT id,status,created_at AS "createdAt",updated_at AS "updatedAt",
+    job_data->>'queueId' AS "queueId",
+    job_data->>'batchNumber' AS "batchNumber",
+    job_data->>'error' AS "error",
+    CASE WHEN (job_data->>'received') ~ '^[0-9]+,async(req,res)=>{try{const result=await query("SELECT id,status,job_data,created_at,updated_at FROM permit_ingest_jobs ORDER BY id DESC LIMIT 30");res.json({jobs:result.rows});}catch(e){res.status(500).json({error:e.message});}});
+app.get('/api/admin/permits/progress',loadUser,requireAdminRole,(req,res)=>res.json({job:permitJob}));
+
+
+app.post('/api/admin/permits/recover',loadUser,requireAdminRole,async(req,res)=>{
+ if(!process.env.ARCH_HUB_SERVICE_KEY)return res.status(400).json({error:'ARCH_HUB_SERVICE_KEY 미설정'});
+ if(permitJob?.status==='running')return res.status(409).json({error:'현재 수집 작업이 진행 중입니다.'});
+ try{
+  const result=await query("SELECT id,job_data FROM permit_ingest_jobs WHERE status IN ('failed','partial') ORDER BY id DESC LIMIT 30");
+  const found=result.rows.find(row=>Array.isArray(row.job_data?.failedWindows)&&row.job_data.failedWindows.length);
+  if(!found)return res.status(404).json({error:'DB에 재수집 가능한 실패 구간이 없습니다.'});
+  const failed=found.job_data.failedWindows;
+  if(failed.length>500)return res.status(400).json({error:'실패 구간이 너무 많습니다.'});
+  const retry=failed.filter(w=>/^\d{5}$/.test(String(w.sigunguCd||''))&&/^\d{5}$/.test(String(w.bjdongCd||''))&&permitDate(w.startDate)&&permitDate(w.endDate)&&w.startDate<=w.endDate);
+  if(!retry.length)return res.status(400).json({error:'유효한 실패 구간이 없습니다.'});
+  permitJob={status:'running',received:0,inserted:0,updated:0,skipped:0,pages:0,completedWindows:0,totalWindows:retry.length,errors:[],failedWindows:[],recoveredFrom:String(found.id),startedAt:new Date().toISOString()};
+  const job=permitJob;
+  void (async()=>{
+   await savePermitJob(job);
+   for(const opts of retry){
+    const child={status:'running',received:0,inserted:0,updated:0,skipped:0,pages:0,total:0};
+    await permitSync(child,opts);
+    for(const k of ['received','inserted','updated','skipped','pages'])job[k]+=child[k];
+    job.completedWindows++;
+    if(child.status!=='completed'){job.errors.push(opts.sigunguCd+'/'+opts.bjdongCd+' '+opts.startDate+'~'+opts.endDate+': '+(child.error||'오류'));job.failedWindows.push(opts);}
+    await savePermitJob(job);
+   }
+   job.status=job.failedWindows.length?(job.failedWindows.length===retry.length?'failed':'partial'):'completed';
+   job.finishedAt=new Date().toISOString();
+   await savePermitJob(job);
+  })().catch(async e=>{job.status='failed';job.error=String(e.message).slice(0,200);job.finishedAt=new Date().toISOString();await savePermitJob(job);});
+  res.status(202).json({job,sourceJobId:String(found.id)});
+ }catch(e){res.status(500).json({error:'저장된 실패 구간 조회 실패: '+e.message});}
+});
+
+app.post('/api/admin/permits/retry',loadUser,requireAdminRole,(req,res)=>{
+ if(!process.env.ARCH_HUB_SERVICE_KEY)return res.status(400).json({error:'ARCH_HUB_SERVICE_KEY 미설정'});
+ if(!permitJob||permitJob.status==='running')return res.status(409).json({error:'재시도 가능한 완료 작업이 없습니다.'});
+ const failed=Array.isArray(permitJob.failedWindows)?permitJob.failedWindows:[];
+ if(!failed.length)return res.status(400).json({error:'재시도할 실패 구간이 없습니다.'});
+ if(failed.length>500)return res.status(400).json({error:'실패 구간이 너무 많습니다.'});
+ const retry=failed.map(w=>({...w}));
+ permitJob={status:'running',received:0,inserted:0,updated:0,skipped:0,pages:0,completedWindows:0,totalWindows:retry.length,errors:[],failedWindows:[],startedAt:new Date().toISOString(),retry:true};
+ const job=permitJob;
+ void (async()=>{await savePermitJob(job);
+  for(const opts of retry){
+   const child={status:'running',received:0,inserted:0,updated:0,skipped:0,pages:0,total:0};
+   await permitSync(child,opts);
+   for(const k of ['received','inserted','updated','skipped','pages'])job[k]+=child[k];
+   job.completedWindows++;
+   await savePermitJob(job);
+   if(child.status!=='completed'){job.errors.push(opts.sigunguCd+'/'+opts.bjdongCd+' '+opts.startDate+'~'+opts.endDate+': '+(child.error||'오류'));job.failedWindows.push(opts);}
+  }
+  job.status=job.failedWindows.length?(job.failedWindows.length===retry.length?'failed':'partial'):'completed';
+  job.finishedAt=new Date().toISOString();await savePermitJob(job);
+ })().catch(e=>{job.status='failed';job.error=String(e.message).slice(0,200);job.finishedAt=new Date().toISOString();});
+ res.status(202).json({job});
+});
+
+
+app.post('/api/admin/permits/windowed',loadUser,requireAdminRole,(req,res)=>{
+ if(!process.env.ARCH_HUB_SERVICE_KEY)return res.status(400).json({error:'ARCH_HUB_SERVICE_KEY 미설정'});
+ if(permitJob?.status==='running')return res.status(409).json({error:'이미 수집 중입니다.'});
+ const {regions,startDate,endDate}=req.body||{};
+ if(!Array.isArray(regions)||regions.length<1||regions.length>20)return res.status(400).json({error:'지역은 1~20개까지 지정하세요.'});
+ const unique=[...new Map(regions.map(r=>({sigunguCd:String(r?.sigunguCd||''),bjdongCd:String(r?.bjdongCd||'')})).map(r=>[r.sigunguCd+':'+r.bjdongCd,r])).values()];
+ if(unique.some(r=>!/^\d{5}$/.test(r.sigunguCd)||!/^\d{5}$/.test(r.bjdongCd)))return res.status(400).json({error:'지역코드는 5자리 숫자여야 합니다.'});
+ if(!permitDate(startDate)||!permitDate(endDate)||startDate>endDate)return res.status(400).json({error:'날짜는 YYYYMMDD 형식이어야 합니다.'});
+ const start=Date.parse(permitDate(startDate)),end=Date.parse(permitDate(endDate));
+ if(end-start>365*86400000)return res.status(400).json({error:'한 번에 최대 1년까지만 조회할 수 있습니다.'});
+ const windows=[];
+ for(let from=start;from<=end;from+=30*86400000){
+  const to=Math.min(from+29*86400000,end);
+  const compact=t=>new Date(t).toISOString().slice(0,10).replace(/-/g,'');
+  windows.push({startDate:compact(from),endDate:compact(to)});
+ }
+ permitJob={status:'running',received:0,inserted:0,updated:0,skipped:0,pages:0,completedWindows:0,totalWindows:windows.length*unique.length,errors:[],failedWindows:[],startedAt:new Date().toISOString()};
+ const job=permitJob;
+ void (async()=>{await savePermitJob(job);
+  for(const region of unique)for(const window of windows){
+   const child={status:'running',received:0,inserted:0,updated:0,skipped:0,pages:0,total:0};
+   await permitSync(child,{...region,...window});
+   for(const k of ['received','inserted','updated','skipped','pages'])job[k]+=child[k];
+   job.completedWindows++;
+   await savePermitJob(job);
+   if(child.status!=='completed'){job.errors.push(region.sigunguCd+'/'+region.bjdongCd+' '+window.startDate+'~'+window.endDate+': '+(child.error||'오류'));job.failedWindows.push({...region,...window});}
+  }
+  job.status=job.errors.length?(job.errors.length===job.totalWindows?'failed':'partial'):'completed';
+  job.finishedAt=new Date().toISOString();await savePermitJob(job);
+ })().catch(e=>{job.status='failed';job.error=String(e.message).slice(0,200);job.finishedAt=new Date().toISOString();});
+ res.status(202).json({job});
+});
+
+
+app.post('/api/admin/permits/batch',loadUser,requireAdminRole,(req,res)=>{
+ if(!process.env.ARCH_HUB_SERVICE_KEY)return res.status(400).json({error:'ARCH_HUB_SERVICE_KEY 미설정'});
+ if(permitJob?.status==='running')return res.status(409).json({error:'이미 수집 중입니다.'});
+ const {regions,startDate,endDate}=req.body||{};
+ if(!Array.isArray(regions)||regions.length<1||regions.length>20)return res.status(400).json({error:'지역은 한 번에 1~20개까지 지정할 수 있습니다.'});
+ const cleaned=regions.map(r=>({sigunguCd:String(r?.sigunguCd||''),bjdongCd:String(r?.bjdongCd||'')}));
+ if(cleaned.some(r=>!/^\d{5}$/.test(r.sigunguCd)||!/^\d{5}$/.test(r.bjdongCd)))return res.status(400).json({error:'지역코드는 각각 5자리 숫자여야 합니다.'});
+ if(!permitDate(startDate)||!permitDate(endDate)||startDate>endDate)return res.status(400).json({error:'유효한 YYYYMMDD 기간을 지정하세요.'});
+ const days=(Date.parse(permitDate(endDate))-Date.parse(permitDate(startDate)))/86400000;
+ if(days>29)return res.status(400).json({error:'한 번에 최대 30일까지만 수집할 수 있습니다.'});
+ const unique=[...new Map(cleaned.map(r=>[r.sigunguCd+':'+r.bjdongCd,r])).values()];
+ permitJob={status:'running',received:0,inserted:0,updated:0,skipped:0,pages:0,total:0,completedRegions:0,regionCount:unique.length,errors:[],startedAt:new Date().toISOString()};
+ void (async()=>{
+  const aggregate=permitJob;
+  await savePermitJob(aggregate);
+  for(const region of unique){
+   const child={status:'running',received:0,inserted:0,updated:0,skipped:0,pages:0,total:0};
+   await permitSync(child,{...region,startDate,endDate});
+   for(const key of ['received','inserted','updated','skipped','pages'])aggregate[key]+=child[key];
+   aggregate.completedRegions++;
+   await savePermitJob(aggregate);
+   if(child.status!=='completed')aggregate.errors.push(region.sigunguCd+'-'+region.bjdongCd+': '+(child.error||'수집 실패'));
+  }
+  aggregate.status=aggregate.errors.length?(aggregate.completedRegions===aggregate.errors.length?'failed':'partial'):'completed';
+  aggregate.finishedAt=new Date().toISOString();await savePermitJob(aggregate);
+ })().catch(e=>{permitJob.status='failed';permitJob.error=String(e.message).slice(0,200);permitJob.finishedAt=new Date().toISOString();});
+ res.status(202).json({job:permitJob});
+});
+
+
+// 관리자 전용 연락처 확보율과 현장별 담당자 목록
+app.get('/api/admin/contacts/coverage', loadUser, requireAdminRole, async (req,res) => {
+  try {
+    const summary = await query(`SELECT COUNT(*)::int AS total,
+      COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM project_contacts c WHERE c.project_id=p.id AND c.role='client'))::int AS client_org,
+      COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM project_contacts c WHERE c.project_id=p.id AND c.role='client' AND c.phone IS NOT NULL))::int AS client_phone,
+      COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM project_contacts c WHERE c.project_id=p.id AND c.role='client' AND c.email IS NOT NULL))::int AS client_email,
+      COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM project_contacts c WHERE c.project_id=p.id AND c.role='designer'))::int AS designer,
+      COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM project_contacts c WHERE c.project_id=p.id AND c.role='supervisor'))::int AS supervisor,
+      COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM project_contacts c WHERE c.project_id=p.id AND c.role='contractor'))::int AS contractor
+      FROM projects p WHERE p.source='g2b_bid'`);
+    const contacts = await query(`SELECT p.id AS project_id,p.name AS project_name,c.role,c.organization,c.department,c.person_name,c.phone,c.email,c.source,c.source_url
+      FROM project_contacts c JOIN projects p ON p.id=c.project_id WHERE p.source='g2b_bid'
+      ORDER BY c.updated_at DESC LIMIT 100`);
+    res.json({summary:summary.rows[0],contacts:contacts.rows});
+  } catch(e) {res.status(500).json({error:e.message});}
+});
+app.get("/api/dashboard", async (req, res) => {
+  try {
+    const total = await query("SELECT COUNT(*)::int AS n FROM projects");
+    const byStage = await query("SELECT stage, COUNT(*)::int AS n FROM projects GROUP BY stage");
+    const recent = await query("SELECT * FROM projects ORDER BY updated_at DESC LIMIT 6");
+    const favorites = await query("SELECT COUNT(*)::int AS n FROM favorites WHERE user_key=$1", [String(req.user.id)]);
+    res.json({ total: total.rows[0].n, byStage: byStage.rows, recent: recent.rows, favorites: favorites.rows[0].n, demo: process.env.DATA_SOURCE_MODE === "demo" });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// 회원 화면: 프로젝트명 우선 검색, 연락처 확보 여부 및 공종 필터
+app.get("/api/projects", async (req, res) => {
+  try {
+    const { q = "", region = "", stage = "", type = "", contact = "", dateField = "event", from = "", to = "", page = "1", limit = "30" } = req.query;
+    const p = Math.max(1, Number(page) || 1), l = Math.min(100, Math.max(1, Number(limit) || 30));
+    const params = [], where = [];
+    function add(v, sql) { where.push(sql.replace(/\?/g, () => { params.push(v); return `$${params.length}`; })); }
+    const keyword = String(q).trim().slice(0,120);
+    if (keyword) add(`%${keyword}%`, "(p.name ILIKE ? OR p.address ILIKE ? OR p.owner ILIKE ? OR p.designer ILIKE ? OR p.contractor ILIKE ? OR EXISTS (SELECT 1 FROM project_contacts pc WHERE pc.project_id=p.id AND (pc.organization ILIKE ? OR pc.person_name ILIKE ?)))");
+    if (region) add(`%${String(region).slice(0,60)}%`, "p.region ILIKE ?");
+    if (stage) add(String(stage).slice(0,30), "p.stage = ?");
+    if (type) add(`%${String(type).slice(0,80)}%`, "p.building_type ILIKE ?");
+    if (contact === 'any') where.push("EXISTS (SELECT 1 FROM project_contacts pc WHERE pc.project_id=p.id)");
+    if (['client','designer','supervisor','contractor'].includes(contact)) add(contact, "EXISTS (SELECT 1 FROM project_contacts pc WHERE pc.project_id=p.id AND pc.role=?)");
+    const dateColumn = dateField === "collected" ? "p.created_at::date" : "CASE WHEN p.stage = 'PERMIT' THEN p.permit_date WHEN p.stage = 'STARTED' THEN p.start_date WHEN p.stage = 'BID' THEN p.source_updated_at ELSE COALESCE(p.permit_date,p.start_date,p.source_updated_at) END";
+    for (const [value,op] of [[from,">="],[to,"<="]]) {
+      if (!value) continue;
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(String(value)) || !Number.isFinite(Date.parse(String(value)))) return res.status(400).json({error:"날짜 형식은 YYYY-MM-DD이어야 합니다."});
+      add(String(value), `(${dateColumn}) ${op} ?::date`);
+    }
+    if(from && to && from>to)return res.status(400).json({error:"시작일이 종료일보다 늦습니다."});
+    const clause = where.length ? `WHERE ${where.join(" AND ")}` : "";
+    const count = await query(`SELECT COUNT(*)::int AS n FROM projects p ${clause}`, params);
+    const rows = await query(`SELECT p.*,
+      (SELECT COUNT(*)::int FROM project_contacts pc WHERE pc.project_id=p.id) AS contact_count,
+      EXISTS(SELECT 1 FROM project_contacts pc WHERE pc.project_id=p.id AND pc.phone IS NOT NULL AND pc.phone<>'') AS has_phone,
+      EXISTS(SELECT 1 FROM project_contacts pc WHERE pc.project_id=p.id AND pc.email IS NOT NULL AND pc.email<>'') AS has_email
+      FROM projects p ${clause}
+      ORDER BY CASE WHEN $${params.length+1}::text <> '' AND p.name ILIKE $${params.length+2} THEN 0 ELSE 1 END,
+        p.updated_at DESC LIMIT $${params.length+3} OFFSET $${params.length+4}`,
+      [...params, keyword, `${keyword}%`, l, (p-1)*l]);
+    res.json({rows:rows.rows,total:count.rows[0].n,page:p,pages:Math.ceil(count.rows[0].n/l)});
+  } catch(e) {res.status(500).json({error:e.message});}
+});
+
+app.get('/api/contacts/summary', async (req,res) => {
+  try {
+    const r=await query(`SELECT COUNT(*)::int AS total,
+      COUNT(*) FILTER (WHERE EXISTS(SELECT 1 FROM project_contacts c WHERE c.project_id=p.id AND c.role='client'))::int AS client,
+      COUNT(*) FILTER (WHERE EXISTS(SELECT 1 FROM project_contacts c WHERE c.project_id=p.id AND c.role='designer'))::int AS designer,
+      COUNT(*) FILTER (WHERE EXISTS(SELECT 1 FROM project_contacts c WHERE c.project_id=p.id AND c.role='supervisor'))::int AS supervisor,
+      COUNT(*) FILTER (WHERE EXISTS(SELECT 1 FROM project_contacts c WHERE c.project_id=p.id AND c.role='contractor'))::int AS contractor,
+      COUNT(*) FILTER (WHERE EXISTS(SELECT 1 FROM project_contacts c WHERE c.project_id=p.id AND c.phone IS NOT NULL AND c.phone<>''))::int AS phone,
+      COUNT(*) FILTER (WHERE EXISTS(SELECT 1 FROM project_contacts c WHERE c.project_id=p.id AND c.email IS NOT NULL AND c.email<>''))::int AS email
+      FROM projects p WHERE p.source='g2b_bid'`);
+    res.json(r.rows[0]);
+  } catch(e){res.status(500).json({error:e.message});}
+});
+
+app.get('/api/project-groups', async(req,res)=>{
+ try{
+  const q=String(req.query.q||'').slice(0,120), region=String(req.query.region||'').slice(0,80);
+  const trade=String(req.query.trade||'').slice(0,60);
+  const page=Math.max(1,parseInt(req.query.page,10)||1);
+  const limit=24;
+  const where=['1=1'],args=[];
+  if(q){args.push('%'+q+'%');where.push(`(g.title ILIKE $${args.length} OR g.owner ILIKE $${args.length})`);}
+  if(region){args.push('%'+region+'%');where.push(`g.region ILIKE $${args.length}`);}
+  if(trade){args.push('%'+trade+'%');where.push(`EXISTS(SELECT 1 FROM projects p WHERE p.project_group_id=g.id AND p.building_type ILIKE $${args.length})`);}
+  const clause=where.join(' AND ');
+  const total=await query(`SELECT COUNT(*)::int AS n FROM project_groups g WHERE ${clause}`,args);
+  const rows=await query(`SELECT g.id,g.title,g.owner,g.region,g.location,
+    COUNT(DISTINCT p.id)::int AS notice_count,
+    COUNT(DISTINCT p.building_type)::int AS trade_count,
+    COUNT(DISTINCT c.id)::int AS contact_count,
+    MAX(p.updated_at) AS latest_notice
+    FROM project_groups g JOIN projects p ON p.project_group_id=g.id
+    LEFT JOIN project_contacts c ON c.project_id=p.id
+    WHERE ${clause}
+    GROUP BY g.id ORDER BY notice_count DESC,latest_notice DESC
+    LIMIT $${args.length+1} OFFSET $${args.length+2}`,[...args,limit,(page-1)*limit]);
+  res.json({rows:rows.rows,total:total.rows[0].n,page,pages:Math.ceil(total.rows[0].n/limit)});
+ }catch(e){res.status(500).json({error:e.message});}
+});
+app.get('/api/project-groups/:id',async(req,res)=>{
+ try{
+  if(!/^\d+$/.test(req.params.id))return res.status(400).json({error:'잘못된 프로젝트 번호'});
+  const g=await query('SELECT * FROM project_groups WHERE id=$1',[req.params.id]);
+  if(!g.rowCount)return res.status(404).json({error:'프로젝트를 찾을 수 없습니다.'});
+  const notices=await query(`SELECT p.id,p.name AS notice_title,p.building_type,p.stage,p.estimated_cost,p.source_url,p.owner,p.address,
+    COALESCE(json_agg(json_build_object('role',c.role,'organization',c.organization,'department',c.department,'person_name',c.person_name,'phone',c.phone,'email',c.email,'source',c.source,'source_url',c.source_url,'verified_at',c.verified_at,'updated_at',c.updated_at)) FILTER (WHERE c.id IS NOT NULL),'[]'::json) AS contacts
+    FROM projects p LEFT JOIN project_contacts c ON c.project_id=p.id
+    WHERE p.project_group_id=$1 GROUP BY p.id ORDER BY p.updated_at DESC`,[req.params.id]);
+  const contacts=await query('SELECT role,organization,department,person_name,phone,email,source,source_url,verified_at,updated_at FROM project_group_contacts WHERE group_id=$1 ORDER BY role,updated_at DESC',[req.params.id]);
+  res.json({...g.rows[0],notices:notices.rows,contacts:contacts.rows});
+ }catch(e){res.status(500).json({error:e.message});}
+});
+// Read-only monitoring: does not regroup or mutate existing notices.
+app.get('/api/admin/project-groups/health',loadUser,requireAdminRole,async(req,res)=>{
+ try{
+  const summary=await query(`SELECT
+    (SELECT COUNT(*)::int FROM projects WHERE source='g2b_bid') AS total_notices,
+    (SELECT COUNT(*)::int FROM project_groups) AS total_groups,
+    (SELECT COUNT(*)::int FROM projects WHERE source='g2b_bid' AND project_group_id IS NOT NULL) AS linked_notices,
+    (SELECT COUNT(*)::int FROM projects WHERE source='g2b_bid' AND project_group_id IS NULL) AS unlinked_notices,
+    (SELECT COUNT(*)::int FROM project_groups g WHERE EXISTS(SELECT 1 FROM projects p WHERE p.project_group_id=g.id)) AS active_groups`);
+  const recent=await query(`SELECT id,name,owner,region,address,updated_at
+    FROM projects WHERE source='g2b_bid' AND project_group_id IS NULL
+    ORDER BY updated_at DESC NULLS LAST,id DESC LIMIT 40`);
+  const candidates=recent.rows.map(p=>{
+    const identity=projectGroupIdentity({...p,source:'g2b_bid'});
+    return {id:p.id,name:p.name,owner:p.owner,region:p.region,updated_at:p.updated_at,
+      matchable:!!identity,reason:identity?'통합 규칙 충족 (아직 연결되지 않음)':'보수적 매칭 기준 미충족'};
+  });
+  res.json({summary:summary.rows[0],recent_unlinked:candidates,
+    note:'통합 기준은 공고명 말미 공종, 발주처, 지역 및 위치 일치입니다. 이 화면은 읽기 전용입니다.'});
+ }catch(e){res.status(500).json({error:e.message});}
+});
+
+// Preview matching decisions without writing any data.
+app.get('/api/admin/project-groups/preview',loadUser,requireAdminRole,async(req,res)=>{
+ try{
+  const limit=Math.min(100,Math.max(1,Number.parseInt(req.query.limit,10)||40));
+  const cursor=Math.max(0,Number.parseInt(req.query.cursor,10)||0);
+  const r=await query(`SELECT id,source,name,owner,address,region
+    FROM projects WHERE source='g2b_bid' AND project_group_id IS NULL AND id>$1
+    ORDER BY id LIMIT $2`,[cursor,limit]);
+  const identities=r.rows.map(p=>({p,identity:projectGroupIdentity(p)}));
+  const keys=[...new Set(identities.filter(x=>x.identity).map(x=>x.identity.key))];
+  const found=keys.length?await query('SELECT id,group_key,title FROM project_groups WHERE group_key=ANY($1::text[])',[keys]):{rows:[]};
+  const existing=new Map(found.rows.map(g=>[g.group_key,g]));
+  const occurrences=new Map();
+  for(const {identity} of identities){if(identity)occurrences.set(identity.key,(occurrences.get(identity.key)||0)+1);}
+  const rows=identities.map(({p,identity})=>{
+    const group=identity?existing.get(identity.key):null;
+    return {id:p.id,notice_name:p.name,owner:p.owner,region:p.region,
+      proposed_group_name:identity?.title||null,existing_group_id:group?.id||null,
+      status:!identity?'manual_review':group?'existing_group':occurrences.get(identity.key)>1?'new_group_candidate':'unmatched_candidate',
+      explanation:!identity?'명칭·공종·발주처·위치 등 필수 기준 미충족':group?'동일 식별키를 가진 기존 그룹 존재':'기존 그룹 없음: 자동 병합 전 검토 필요'};
+  });
+  res.json({rows,processed:rows.length,next_cursor:r.rows.length?r.rows[r.rows.length-1].id:cursor,done:r.rows.length<limit,read_only:true,
+    warning:'이 미리보기는 DB를 변경하지 않습니다. 같은 페이지에 없는 공고는 후보 집계에 포함되지 않습니다.'});
+ }catch(e){res.status(500).json({error:e.message});}
+});
+
+// Explicit admin approval: only a strict identity-key match to an existing group is accepted.
+app.post('/api/admin/project-groups/approve',loadUser,requireAdminRole,async(req,res)=>{
+ try{
+  const noticeId=Number(req.body?.notice_id),groupId=Number(req.body?.group_id);
+  if(!Number.isSafeInteger(noticeId)||noticeId<=0||!Number.isSafeInteger(groupId)||groupId<=0)
+    return res.status(400).json({error:'유효한 공고 ID와 프로젝트 ID가 필요합니다.'});
+  const p=await query('SELECT id,source,name,owner,address,region,project_group_id FROM projects WHERE id=$1',[noticeId]);
+  if(!p.rowCount)return res.status(404).json({error:'공고를 찾을 수 없습니다.'});
+  if(p.rows[0].project_group_id!==null)return res.status(409).json({error:'이미 연결된 공고입니다. 변경하지 않았습니다.'});
+  const identity=projectGroupIdentity(p.rows[0]);
+  if(!identity)return res.status(422).json({error:'엄격한 자동 매칭 기준을 충족하지 않습니다. 연결하지 않았습니다.'});
+  const updated=await query(`UPDATE projects AS p SET project_group_id=g.id
+    FROM project_groups AS g
+    WHERE p.id=$1 AND p.source='g2b_bid' AND p.project_group_id IS NULL
+      AND g.id=$2 AND g.group_key=$3
+    RETURNING p.id,p.project_group_id`,[noticeId,groupId,identity.key]);
+  if(!updated.rowCount)return res.status(409).json({error:'그룹 식별키 불일치 또는 다른 관리자가 먼저 변경했습니다. 다시 조회하세요.'});
+  console.info('Project group approved', {noticeId,groupId,adminId:req.user?.id});
+  res.json({ok:true,notice_id:noticeId,group_id:groupId});
+ }catch(e){res.status(500).json({error:e.message});}
+});
+
+// Store only attributable, manually reviewed public organization details.
+app.post('/api/admin/project-groups/:id/contacts',loadUser,requireAdminRole,async(req,res)=>{
+ try{
+  const groupId=Number(req.params.id);
+  if(!Number.isSafeInteger(groupId)||groupId<=0)return res.status(400).json({error:'잘못된 프로젝트 ID'});
+  const role=String(req.body?.role||'').trim();
+  const organization=String(req.body?.organization||'').trim().slice(0,200);
+  const department=String(req.body?.department||'').trim().slice(0,120)||null;
+  const personName=String(req.body?.person_name||'').trim().slice(0,100)||null;
+  const phone=String(req.body?.phone||'').trim().slice(0,80)||null;
+  const email=String(req.body?.email||'').trim().slice(0,200)||null;
+  const sourceUrl=String(req.body?.source_url||'').trim().slice(0,1000);
+  if(!['client','designer','supervisor','contractor'].includes(role)||!organization)
+    return res.status(400).json({error:'참여기관 유형과 기관명은 필수입니다.'});
+  let url;
+  try{url=new URL(sourceUrl);}catch{return res.status(400).json({error:'근거가 되는 공개자료 URL을 입력하세요.'});}
+  if(!['http:','https:'].includes(url.protocol)||!url.hostname.includes('.'))
+    return res.status(400).json({error:'HTTP(S) 공개자료 URL만 허용됩니다.'});
+  if(email&&!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
+    return res.status(400).json({error:'이메일 형식을 확인하세요.'});
+  const g=await query('SELECT id FROM project_groups WHERE id=$1',[groupId]);
+  if(!g.rowCount)return res.status(404).json({error:'프로젝트를 찾을 수 없습니다.'});
+  const result=await query(`INSERT INTO project_group_contacts
+    (group_id,role,organization,department,person_name,phone,email,source,source_url)
+    VALUES($1,$2,$3,$4,$5,$6,$7,'manual_public',$8)
+    ON CONFLICT(group_id,role,organization,source) DO UPDATE SET
+      department=EXCLUDED.department,person_name=EXCLUDED.person_name,
+      phone=EXCLUDED.phone,email=EXCLUDED.email,source_url=EXCLUDED.source_url,
+      verified_at=NULL,updated_at=NOW()
+    RETURNING id,group_id,role,organization,source,source_url,verified_at`,
+    [groupId,role,organization,department,personName,phone,email,url.href]);
+  res.status(201).json({ok:true,contact:result.rows[0],note:'출처 URL이 등록되었습니다. 실제 내용의 검증 완료를 의미하지 않습니다.'});
+ }catch(e){res.status(500).json({error:e.message});}
+});
+
+app.post('/api/admin/project-groups/backfill',loadUser,requireAdminRole,async(req,res)=>{
+ try{
+  const limit=Math.min(500,Math.max(1,parseInt(req.body?.limit,10)||200));
+  const cursor=Math.max(0,parseInt(req.body?.cursor,10)||0);
+  const r=await query(`SELECT id,source,name,owner,address,region FROM projects
+    WHERE source='g2b_bid' AND id>$1 ORDER BY id LIMIT $2`,[cursor,limit]);
+  let linked=0,unmatched=0,errors=0;
+  for(const p of r.rows){try{if(await linkProjectGroup(p))linked++;else unmatched++;}catch(e){errors++;console.warn('Group backfill:',p.id,e.message);}}
+  res.json({processed:r.rows.length,linked,unmatched,errors,nextCursor:r.rows.length?r.rows[r.rows.length-1].id:cursor,done:r.rows.length<limit});
+ }catch(e){res.status(500).json({error:e.message});}
+});
+
+app.get("/api/projects/:id", async (req, res) => {
+  try {
+    const r = await query("SELECT * FROM projects WHERE id=$1", [req.params.id]);
+    if (!r.rowCount) return res.status(404).json({ error: "현장을 찾을 수 없습니다." });
+    const f = await query("SELECT id FROM favorites WHERE project_id=$1 AND user_key=$2", [req.params.id, String(req.user.id)]);
+    const s = await query("SELECT status,note FROM sales_pipeline WHERE project_id=$1 AND user_key=$2", [req.params.id, String(req.user.id)]);
+    const contacts = await query(`SELECT role,organization,department,person_name,phone,email,source,source_url,verified_at,updated_at
+      FROM project_contacts WHERE project_id=$1 ORDER BY CASE role WHEN 'client' THEN 1 WHEN 'designer' THEN 2 WHEN 'supervisor' THEN 3 ELSE 4 END, updated_at DESC`,[req.params.id]);
+    res.json({ ...r.rows[0], contacts: contacts.rows, favorite: !!f.rowCount, pipeline: s.rows[0] || { status: "NEW", note: "" } });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post("/api/projects/:id/favorite", async (req, res) => {
+  try {
+    const exists = await query("SELECT id FROM favorites WHERE project_id=$1 AND user_key=$2", [req.params.id, String(req.user.id)]);
+    if (exists.rowCount) await query("DELETE FROM favorites WHERE project_id=$1 AND user_key=$2", [req.params.id, String(req.user.id)]);
+    else await query("INSERT INTO favorites(project_id,user_key) VALUES($1,$2) ON CONFLICT DO NOTHING", [req.params.id, String(req.user.id)]);
+    res.json({ favorite: !exists.rowCount });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.put("/api/projects/:id/pipeline", async (req, res) => {
+  try {
+    const status = String(req.body.status || "NEW").slice(0, 30);
+    const note = String(req.body.note || "").slice(0, 2000);
+    await query(`INSERT INTO sales_pipeline(project_id,user_key,status,note) VALUES($1,$2,$3,$4)
+      ON CONFLICT(project_id,user_key) DO UPDATE SET status=EXCLUDED.status,note=EXCLUDED.note,updated_at=NOW()`, [req.params.id, String(req.user.id), status, note]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get("/api/recommendations", async (req, res) => {
+  try {
+    const key = profiles[req.query.profile] ? req.query.profile : "automation";
+    const rows = await query("SELECT * FROM projects ORDER BY updated_at DESC LIMIT 500");
+    const ranked = rows.rows.map(x => ({ ...x, score: scoreProject(x, key), profile: profiles[key].label }))
+      .sort((a,b) => b.score - a.score).slice(0, 100);
+    res.json({ profile: profiles[key].label, rows: ranked });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get("/api/favorites", async (req, res) => {
+  try {
+    const r = await query(`SELECT p.* FROM projects p JOIN favorites f ON f.project_id=p.id WHERE f.user_key=$1 ORDER BY f.created_at DESC`, [String(req.user.id)]);
+    res.json({ rows: r.rows });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get("/api/export.csv", async (req, res) => {
+  try {
+    const r = await query(`SELECT name AS "현장명",address AS "주소",region AS "시도",district AS "시군구",building_type AS "건물용도",stage AS "진행단계",permit_date AS "허가일",start_date AS "착공일",completion_date AS "사용승인일",owner AS "건축주/발주처",designer AS "설계사",supervisor AS "감리사",contractor AS "시공사",area_sqm AS "연면적" FROM projects ORDER BY updated_at DESC LIMIT 20000`);
+    const headers = Object.keys(r.rows[0] || { "현장명": "" });
+    const csv = [headers.join(","), ...r.rows.map(row => headers.map(h => `"${String(row[h] ?? "").replace(/"/g, '""')}"`).join(","))].join("\r\n");
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", "attachment; filename=build-signal-projects.csv");
+    res.send("\uFEFF" + csv);
+  } catch (e) { res.status(500).send(e.message); }
+});
+
+app.post("/api/ingest/projects", requireAdminRole, requireAdmin, async (req, res) => {
+  const source = String(req.body.source || "external").slice(0, 200);
+  const projects = Array.isArray(req.body.projects) ? req.body.projects.slice(0, 5000) : [];
+  let inserted = 0;
+  try {
+    for (const p of projects) {
+      if (!p.name) continue;
+      const values = [
+        source, p.externalId || null, p.name, p.address || null, p.region || null, p.district || null,
+        p.buildingType || null, STAGES.includes(p.stage) ? p.stage : "UNKNOWN",
+        normalizeDate(p.permitDate), normalizeDate(p.startDate), normalizeDate(p.completionDate),
+        p.floorsAbove || null, p.floorsBelow || null, p.areaSqm || null, p.estimatedCost || null,
+        p.owner || null, p.designer || null, p.supervisor || null, p.contractor || null,
+        p.sourceUrl || null, normalizeDate(p.sourceUpdatedAt)
+      ];
+      const result = await query(`INSERT INTO projects(source,external_id,name,address,region,district,building_type,stage,permit_date,start_date,completion_date,floors_above,floors_below,area_sqm,estimated_cost,owner,designer,supervisor,contractor,source_url,source_updated_at)
+        VALUES(${values.map((_,i)=>`$${i+1}`).join(",")})
+        ON CONFLICT(source,external_id) DO UPDATE SET name=EXCLUDED.name,address=EXCLUDED.address,region=EXCLUDED.region,district=EXCLUDED.district,building_type=EXCLUDED.building_type,stage=EXCLUDED.stage,permit_date=EXCLUDED.permit_date,start_date=EXCLUDED.start_date,completion_date=EXCLUDED.completion_date,owner=EXCLUDED.owner,designer=EXCLUDED.designer,supervisor=EXCLUDED.supervisor,source_url=EXCLUDED.source_url,source_updated_at=EXCLUDED.source_updated_at,updated_at=NOW()
+        RETURNING (xmax = 0) AS inserted`, values);
+      if (result.rows[0]?.inserted) inserted++;
+    }
+    await query("INSERT INTO ingest_logs(source,received_count,inserted_count,status,message) VALUES($1,$2,$3,'SUCCESS','Ingest completed')", [source, projects.length, inserted]);
+    res.json({ ok: true, received: projects.length, insertedOrUpdated: projects.length, inserted });
+  } catch (e) {
+    await query("INSERT INTO ingest_logs(source,received_count,inserted_count,status,message) VALUES($1,$2,$3,'ERROR',$4)", [source, projects.length, inserted, e.message]).catch(()=>{});
+    res.status(500).json({ error: e.message, insertedBeforeError: inserted });
+  }
+});
+
+app.get("/api/admin/ingest-logs", requireAdmin, async (req,res) => {
+  const r = await query("SELECT * FROM ingest_logs ORDER BY created_at DESC LIMIT 100");
+  res.json({ rows: r.rows });
+});
+
+app.post("/api/admin/demo-seed", requireAdmin, async (req,res) => {
+  const demo = [
+    ["DEMO-001","강남 업무시설 신축 프로젝트","서울특별시 강남구 테헤란로","서울특별시","강남구","업무시설","PERMIT","2026-10-12",null,null,22,5,28000,"가상 건축주 A","가상 설계사 B","가상 감리사 C",null],
+    ["DEMO-002","부산 해운대 호텔 신축 프로젝트","부산광역시 해운대구 해운대로","부산광역시","해운대구","숙박시설","STARTED","2026-06-03","2026-09-18",null,18,3,19000,"가상 시행사 D","가상 설계사 E","가상 감리사 F","가상 시공사 G"],
+    ["DEMO-003","인천 물류센터 증축 프로젝트","인천광역시 서구 산업로","인천광역시","서구","창고시설","BID","2026-10-29",null,null,4,1,14000,"가상 발주처 H",null,null,null],
+    ["DEMO-004","제주 리조트 신축 프로젝트","제주특별자치도 서귀포시 중문관광로","제주특별자치도","서귀포시","숙박시설","PERMIT","2026-10-20",null,null,12,2,16000,"가상 건축주 I","가상 설계사 J","가상 감리사 K",null],
+    ["DEMO-005","대전 연구시설 신축 프로젝트","대전광역시 유성구 대학로","대전광역시","유성구","교육연구시설","COMPLETED","2026-03-10","2026-05-01","2026-10-25",10,2,11000,"가상 기관 L","가상 설계사 M","가상 감리사 N","가상 시공사 O"]
+  ];
+  let n=0;
+  for (const d of demo) {
+    await query(`INSERT INTO projects(source,external_id,name,address,region,district,building_type,stage,permit_date,start_date,completion_date,floors_above,floors_below,area_sqm,owner,designer,supervisor,contractor)
+      VALUES('demo',$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+      ON CONFLICT(source,external_id) DO NOTHING`, d);
+    n++;
+  }
+  res.json({ ok:true, attempted:n, notice:"데모 데이터는 실제 현장정보가 아닙니다." });
+});
+
+app.get("/login", (req,res)=>res.sendFile(path.join(__dirname,"..","public","login.html")));
+async function start() {
+  await initDb();
+  if (process.env.ADMIN_EMAIL && process.env.ADMIN_PASSWORD) {
+    const email=String(process.env.ADMIN_EMAIL).trim().toLowerCase();
+    const hash=await bcrypt.hash(String(process.env.ADMIN_PASSWORD),12);
+    await query(`INSERT INTO users(email,password_hash,company_name,contact_name,role,status,approved_at)
+      VALUES($1,$2,'BUILD SIGNAL 운영팀','관리자','admin','approved',NOW())
+      ON CONFLICT(email) DO UPDATE SET password_hash=EXCLUDED.password_hash,role='admin',status='approved'`,[email,hash]);
+  }
+  const port = process.env.PORT || 10000;
+  app.listen(port, () => console.log(`BUILD SIGNAL listening on ${port}`));
+}
+start().catch(e => { console.error("Startup failed:", e); process.exit(1); });
+ THEN (job_data->>'received')::int ELSE 0 END AS received,
+    CASE WHEN (job_data->>'inserted') ~ '^[0-9]+,async(req,res)=>{try{const result=await query("SELECT id,status,job_data,created_at,updated_at FROM permit_ingest_jobs ORDER BY id DESC LIMIT 30");res.json({jobs:result.rows});}catch(e){res.status(500).json({error:e.message});}});
+app.get('/api/admin/permits/progress',loadUser,requireAdminRole,(req,res)=>res.json({job:permitJob}));
+
+
+app.post('/api/admin/permits/recover',loadUser,requireAdminRole,async(req,res)=>{
+ if(!process.env.ARCH_HUB_SERVICE_KEY)return res.status(400).json({error:'ARCH_HUB_SERVICE_KEY 미설정'});
+ if(permitJob?.status==='running')return res.status(409).json({error:'현재 수집 작업이 진행 중입니다.'});
+ try{
+  const result=await query("SELECT id,job_data FROM permit_ingest_jobs WHERE status IN ('failed','partial') ORDER BY id DESC LIMIT 30");
+  const found=result.rows.find(row=>Array.isArray(row.job_data?.failedWindows)&&row.job_data.failedWindows.length);
+  if(!found)return res.status(404).json({error:'DB에 재수집 가능한 실패 구간이 없습니다.'});
+  const failed=found.job_data.failedWindows;
+  if(failed.length>500)return res.status(400).json({error:'실패 구간이 너무 많습니다.'});
+  const retry=failed.filter(w=>/^\d{5}$/.test(String(w.sigunguCd||''))&&/^\d{5}$/.test(String(w.bjdongCd||''))&&permitDate(w.startDate)&&permitDate(w.endDate)&&w.startDate<=w.endDate);
+  if(!retry.length)return res.status(400).json({error:'유효한 실패 구간이 없습니다.'});
+  permitJob={status:'running',received:0,inserted:0,updated:0,skipped:0,pages:0,completedWindows:0,totalWindows:retry.length,errors:[],failedWindows:[],recoveredFrom:String(found.id),startedAt:new Date().toISOString()};
+  const job=permitJob;
+  void (async()=>{
+   await savePermitJob(job);
+   for(const opts of retry){
+    const child={status:'running',received:0,inserted:0,updated:0,skipped:0,pages:0,total:0};
+    await permitSync(child,opts);
+    for(const k of ['received','inserted','updated','skipped','pages'])job[k]+=child[k];
+    job.completedWindows++;
+    if(child.status!=='completed'){job.errors.push(opts.sigunguCd+'/'+opts.bjdongCd+' '+opts.startDate+'~'+opts.endDate+': '+(child.error||'오류'));job.failedWindows.push(opts);}
+    await savePermitJob(job);
+   }
+   job.status=job.failedWindows.length?(job.failedWindows.length===retry.length?'failed':'partial'):'completed';
+   job.finishedAt=new Date().toISOString();
+   await savePermitJob(job);
+  })().catch(async e=>{job.status='failed';job.error=String(e.message).slice(0,200);job.finishedAt=new Date().toISOString();await savePermitJob(job);});
+  res.status(202).json({job,sourceJobId:String(found.id)});
+ }catch(e){res.status(500).json({error:'저장된 실패 구간 조회 실패: '+e.message});}
+});
+
+app.post('/api/admin/permits/retry',loadUser,requireAdminRole,(req,res)=>{
+ if(!process.env.ARCH_HUB_SERVICE_KEY)return res.status(400).json({error:'ARCH_HUB_SERVICE_KEY 미설정'});
+ if(!permitJob||permitJob.status==='running')return res.status(409).json({error:'재시도 가능한 완료 작업이 없습니다.'});
+ const failed=Array.isArray(permitJob.failedWindows)?permitJob.failedWindows:[];
+ if(!failed.length)return res.status(400).json({error:'재시도할 실패 구간이 없습니다.'});
+ if(failed.length>500)return res.status(400).json({error:'실패 구간이 너무 많습니다.'});
+ const retry=failed.map(w=>({...w}));
+ permitJob={status:'running',received:0,inserted:0,updated:0,skipped:0,pages:0,completedWindows:0,totalWindows:retry.length,errors:[],failedWindows:[],startedAt:new Date().toISOString(),retry:true};
+ const job=permitJob;
+ void (async()=>{await savePermitJob(job);
+  for(const opts of retry){
+   const child={status:'running',received:0,inserted:0,updated:0,skipped:0,pages:0,total:0};
+   await permitSync(child,opts);
+   for(const k of ['received','inserted','updated','skipped','pages'])job[k]+=child[k];
+   job.completedWindows++;
+   await savePermitJob(job);
+   if(child.status!=='completed'){job.errors.push(opts.sigunguCd+'/'+opts.bjdongCd+' '+opts.startDate+'~'+opts.endDate+': '+(child.error||'오류'));job.failedWindows.push(opts);}
+  }
+  job.status=job.failedWindows.length?(job.failedWindows.length===retry.length?'failed':'partial'):'completed';
+  job.finishedAt=new Date().toISOString();await savePermitJob(job);
+ })().catch(e=>{job.status='failed';job.error=String(e.message).slice(0,200);job.finishedAt=new Date().toISOString();});
+ res.status(202).json({job});
+});
+
+
+app.post('/api/admin/permits/windowed',loadUser,requireAdminRole,(req,res)=>{
+ if(!process.env.ARCH_HUB_SERVICE_KEY)return res.status(400).json({error:'ARCH_HUB_SERVICE_KEY 미설정'});
+ if(permitJob?.status==='running')return res.status(409).json({error:'이미 수집 중입니다.'});
+ const {regions,startDate,endDate}=req.body||{};
+ if(!Array.isArray(regions)||regions.length<1||regions.length>20)return res.status(400).json({error:'지역은 1~20개까지 지정하세요.'});
+ const unique=[...new Map(regions.map(r=>({sigunguCd:String(r?.sigunguCd||''),bjdongCd:String(r?.bjdongCd||'')})).map(r=>[r.sigunguCd+':'+r.bjdongCd,r])).values()];
+ if(unique.some(r=>!/^\d{5}$/.test(r.sigunguCd)||!/^\d{5}$/.test(r.bjdongCd)))return res.status(400).json({error:'지역코드는 5자리 숫자여야 합니다.'});
+ if(!permitDate(startDate)||!permitDate(endDate)||startDate>endDate)return res.status(400).json({error:'날짜는 YYYYMMDD 형식이어야 합니다.'});
+ const start=Date.parse(permitDate(startDate)),end=Date.parse(permitDate(endDate));
+ if(end-start>365*86400000)return res.status(400).json({error:'한 번에 최대 1년까지만 조회할 수 있습니다.'});
+ const windows=[];
+ for(let from=start;from<=end;from+=30*86400000){
+  const to=Math.min(from+29*86400000,end);
+  const compact=t=>new Date(t).toISOString().slice(0,10).replace(/-/g,'');
+  windows.push({startDate:compact(from),endDate:compact(to)});
+ }
+ permitJob={status:'running',received:0,inserted:0,updated:0,skipped:0,pages:0,completedWindows:0,totalWindows:windows.length*unique.length,errors:[],failedWindows:[],startedAt:new Date().toISOString()};
+ const job=permitJob;
+ void (async()=>{await savePermitJob(job);
+  for(const region of unique)for(const window of windows){
+   const child={status:'running',received:0,inserted:0,updated:0,skipped:0,pages:0,total:0};
+   await permitSync(child,{...region,...window});
+   for(const k of ['received','inserted','updated','skipped','pages'])job[k]+=child[k];
+   job.completedWindows++;
+   await savePermitJob(job);
+   if(child.status!=='completed'){job.errors.push(region.sigunguCd+'/'+region.bjdongCd+' '+window.startDate+'~'+window.endDate+': '+(child.error||'오류'));job.failedWindows.push({...region,...window});}
+  }
+  job.status=job.errors.length?(job.errors.length===job.totalWindows?'failed':'partial'):'completed';
+  job.finishedAt=new Date().toISOString();await savePermitJob(job);
+ })().catch(e=>{job.status='failed';job.error=String(e.message).slice(0,200);job.finishedAt=new Date().toISOString();});
+ res.status(202).json({job});
+});
+
+
+app.post('/api/admin/permits/batch',loadUser,requireAdminRole,(req,res)=>{
+ if(!process.env.ARCH_HUB_SERVICE_KEY)return res.status(400).json({error:'ARCH_HUB_SERVICE_KEY 미설정'});
+ if(permitJob?.status==='running')return res.status(409).json({error:'이미 수집 중입니다.'});
+ const {regions,startDate,endDate}=req.body||{};
+ if(!Array.isArray(regions)||regions.length<1||regions.length>20)return res.status(400).json({error:'지역은 한 번에 1~20개까지 지정할 수 있습니다.'});
+ const cleaned=regions.map(r=>({sigunguCd:String(r?.sigunguCd||''),bjdongCd:String(r?.bjdongCd||'')}));
+ if(cleaned.some(r=>!/^\d{5}$/.test(r.sigunguCd)||!/^\d{5}$/.test(r.bjdongCd)))return res.status(400).json({error:'지역코드는 각각 5자리 숫자여야 합니다.'});
+ if(!permitDate(startDate)||!permitDate(endDate)||startDate>endDate)return res.status(400).json({error:'유효한 YYYYMMDD 기간을 지정하세요.'});
+ const days=(Date.parse(permitDate(endDate))-Date.parse(permitDate(startDate)))/86400000;
+ if(days>29)return res.status(400).json({error:'한 번에 최대 30일까지만 수집할 수 있습니다.'});
+ const unique=[...new Map(cleaned.map(r=>[r.sigunguCd+':'+r.bjdongCd,r])).values()];
+ permitJob={status:'running',received:0,inserted:0,updated:0,skipped:0,pages:0,total:0,completedRegions:0,regionCount:unique.length,errors:[],startedAt:new Date().toISOString()};
+ void (async()=>{
+  const aggregate=permitJob;
+  await savePermitJob(aggregate);
+  for(const region of unique){
+   const child={status:'running',received:0,inserted:0,updated:0,skipped:0,pages:0,total:0};
+   await permitSync(child,{...region,startDate,endDate});
+   for(const key of ['received','inserted','updated','skipped','pages'])aggregate[key]+=child[key];
+   aggregate.completedRegions++;
+   await savePermitJob(aggregate);
+   if(child.status!=='completed')aggregate.errors.push(region.sigunguCd+'-'+region.bjdongCd+': '+(child.error||'수집 실패'));
+  }
+  aggregate.status=aggregate.errors.length?(aggregate.completedRegions===aggregate.errors.length?'failed':'partial'):'completed';
+  aggregate.finishedAt=new Date().toISOString();await savePermitJob(aggregate);
+ })().catch(e=>{permitJob.status='failed';permitJob.error=String(e.message).slice(0,200);permitJob.finishedAt=new Date().toISOString();});
+ res.status(202).json({job:permitJob});
+});
+
+
+// 관리자 전용 연락처 확보율과 현장별 담당자 목록
+app.get('/api/admin/contacts/coverage', loadUser, requireAdminRole, async (req,res) => {
+  try {
+    const summary = await query(`SELECT COUNT(*)::int AS total,
+      COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM project_contacts c WHERE c.project_id=p.id AND c.role='client'))::int AS client_org,
+      COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM project_contacts c WHERE c.project_id=p.id AND c.role='client' AND c.phone IS NOT NULL))::int AS client_phone,
+      COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM project_contacts c WHERE c.project_id=p.id AND c.role='client' AND c.email IS NOT NULL))::int AS client_email,
+      COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM project_contacts c WHERE c.project_id=p.id AND c.role='designer'))::int AS designer,
+      COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM project_contacts c WHERE c.project_id=p.id AND c.role='supervisor'))::int AS supervisor,
+      COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM project_contacts c WHERE c.project_id=p.id AND c.role='contractor'))::int AS contractor
+      FROM projects p WHERE p.source='g2b_bid'`);
+    const contacts = await query(`SELECT p.id AS project_id,p.name AS project_name,c.role,c.organization,c.department,c.person_name,c.phone,c.email,c.source,c.source_url
+      FROM project_contacts c JOIN projects p ON p.id=c.project_id WHERE p.source='g2b_bid'
+      ORDER BY c.updated_at DESC LIMIT 100`);
+    res.json({summary:summary.rows[0],contacts:contacts.rows});
+  } catch(e) {res.status(500).json({error:e.message});}
+});
+app.get("/api/dashboard", async (req, res) => {
+  try {
+    const total = await query("SELECT COUNT(*)::int AS n FROM projects");
+    const byStage = await query("SELECT stage, COUNT(*)::int AS n FROM projects GROUP BY stage");
+    const recent = await query("SELECT * FROM projects ORDER BY updated_at DESC LIMIT 6");
+    const favorites = await query("SELECT COUNT(*)::int AS n FROM favorites WHERE user_key=$1", [String(req.user.id)]);
+    res.json({ total: total.rows[0].n, byStage: byStage.rows, recent: recent.rows, favorites: favorites.rows[0].n, demo: process.env.DATA_SOURCE_MODE === "demo" });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// 회원 화면: 프로젝트명 우선 검색, 연락처 확보 여부 및 공종 필터
+app.get("/api/projects", async (req, res) => {
+  try {
+    const { q = "", region = "", stage = "", type = "", contact = "", dateField = "event", from = "", to = "", page = "1", limit = "30" } = req.query;
+    const p = Math.max(1, Number(page) || 1), l = Math.min(100, Math.max(1, Number(limit) || 30));
+    const params = [], where = [];
+    function add(v, sql) { where.push(sql.replace(/\?/g, () => { params.push(v); return `$${params.length}`; })); }
+    const keyword = String(q).trim().slice(0,120);
+    if (keyword) add(`%${keyword}%`, "(p.name ILIKE ? OR p.address ILIKE ? OR p.owner ILIKE ? OR p.designer ILIKE ? OR p.contractor ILIKE ? OR EXISTS (SELECT 1 FROM project_contacts pc WHERE pc.project_id=p.id AND (pc.organization ILIKE ? OR pc.person_name ILIKE ?)))");
+    if (region) add(`%${String(region).slice(0,60)}%`, "p.region ILIKE ?");
+    if (stage) add(String(stage).slice(0,30), "p.stage = ?");
+    if (type) add(`%${String(type).slice(0,80)}%`, "p.building_type ILIKE ?");
+    if (contact === 'any') where.push("EXISTS (SELECT 1 FROM project_contacts pc WHERE pc.project_id=p.id)");
+    if (['client','designer','supervisor','contractor'].includes(contact)) add(contact, "EXISTS (SELECT 1 FROM project_contacts pc WHERE pc.project_id=p.id AND pc.role=?)");
+    const dateColumn = dateField === "collected" ? "p.created_at::date" : "CASE WHEN p.stage = 'PERMIT' THEN p.permit_date WHEN p.stage = 'STARTED' THEN p.start_date WHEN p.stage = 'BID' THEN p.source_updated_at ELSE COALESCE(p.permit_date,p.start_date,p.source_updated_at) END";
+    for (const [value,op] of [[from,">="],[to,"<="]]) {
+      if (!value) continue;
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(String(value)) || !Number.isFinite(Date.parse(String(value)))) return res.status(400).json({error:"날짜 형식은 YYYY-MM-DD이어야 합니다."});
+      add(String(value), `(${dateColumn}) ${op} ?::date`);
+    }
+    if(from && to && from>to)return res.status(400).json({error:"시작일이 종료일보다 늦습니다."});
+    const clause = where.length ? `WHERE ${where.join(" AND ")}` : "";
+    const count = await query(`SELECT COUNT(*)::int AS n FROM projects p ${clause}`, params);
+    const rows = await query(`SELECT p.*,
+      (SELECT COUNT(*)::int FROM project_contacts pc WHERE pc.project_id=p.id) AS contact_count,
+      EXISTS(SELECT 1 FROM project_contacts pc WHERE pc.project_id=p.id AND pc.phone IS NOT NULL AND pc.phone<>'') AS has_phone,
+      EXISTS(SELECT 1 FROM project_contacts pc WHERE pc.project_id=p.id AND pc.email IS NOT NULL AND pc.email<>'') AS has_email
+      FROM projects p ${clause}
+      ORDER BY CASE WHEN $${params.length+1}::text <> '' AND p.name ILIKE $${params.length+2} THEN 0 ELSE 1 END,
+        p.updated_at DESC LIMIT $${params.length+3} OFFSET $${params.length+4}`,
+      [...params, keyword, `${keyword}%`, l, (p-1)*l]);
+    res.json({rows:rows.rows,total:count.rows[0].n,page:p,pages:Math.ceil(count.rows[0].n/l)});
+  } catch(e) {res.status(500).json({error:e.message});}
+});
+
+app.get('/api/contacts/summary', async (req,res) => {
+  try {
+    const r=await query(`SELECT COUNT(*)::int AS total,
+      COUNT(*) FILTER (WHERE EXISTS(SELECT 1 FROM project_contacts c WHERE c.project_id=p.id AND c.role='client'))::int AS client,
+      COUNT(*) FILTER (WHERE EXISTS(SELECT 1 FROM project_contacts c WHERE c.project_id=p.id AND c.role='designer'))::int AS designer,
+      COUNT(*) FILTER (WHERE EXISTS(SELECT 1 FROM project_contacts c WHERE c.project_id=p.id AND c.role='supervisor'))::int AS supervisor,
+      COUNT(*) FILTER (WHERE EXISTS(SELECT 1 FROM project_contacts c WHERE c.project_id=p.id AND c.role='contractor'))::int AS contractor,
+      COUNT(*) FILTER (WHERE EXISTS(SELECT 1 FROM project_contacts c WHERE c.project_id=p.id AND c.phone IS NOT NULL AND c.phone<>''))::int AS phone,
+      COUNT(*) FILTER (WHERE EXISTS(SELECT 1 FROM project_contacts c WHERE c.project_id=p.id AND c.email IS NOT NULL AND c.email<>''))::int AS email
+      FROM projects p WHERE p.source='g2b_bid'`);
+    res.json(r.rows[0]);
+  } catch(e){res.status(500).json({error:e.message});}
+});
+
+app.get('/api/project-groups', async(req,res)=>{
+ try{
+  const q=String(req.query.q||'').slice(0,120), region=String(req.query.region||'').slice(0,80);
+  const trade=String(req.query.trade||'').slice(0,60);
+  const page=Math.max(1,parseInt(req.query.page,10)||1);
+  const limit=24;
+  const where=['1=1'],args=[];
+  if(q){args.push('%'+q+'%');where.push(`(g.title ILIKE $${args.length} OR g.owner ILIKE $${args.length})`);}
+  if(region){args.push('%'+region+'%');where.push(`g.region ILIKE $${args.length}`);}
+  if(trade){args.push('%'+trade+'%');where.push(`EXISTS(SELECT 1 FROM projects p WHERE p.project_group_id=g.id AND p.building_type ILIKE $${args.length})`);}
+  const clause=where.join(' AND ');
+  const total=await query(`SELECT COUNT(*)::int AS n FROM project_groups g WHERE ${clause}`,args);
+  const rows=await query(`SELECT g.id,g.title,g.owner,g.region,g.location,
+    COUNT(DISTINCT p.id)::int AS notice_count,
+    COUNT(DISTINCT p.building_type)::int AS trade_count,
+    COUNT(DISTINCT c.id)::int AS contact_count,
+    MAX(p.updated_at) AS latest_notice
+    FROM project_groups g JOIN projects p ON p.project_group_id=g.id
+    LEFT JOIN project_contacts c ON c.project_id=p.id
+    WHERE ${clause}
+    GROUP BY g.id ORDER BY notice_count DESC,latest_notice DESC
+    LIMIT $${args.length+1} OFFSET $${args.length+2}`,[...args,limit,(page-1)*limit]);
+  res.json({rows:rows.rows,total:total.rows[0].n,page,pages:Math.ceil(total.rows[0].n/limit)});
+ }catch(e){res.status(500).json({error:e.message});}
+});
+app.get('/api/project-groups/:id',async(req,res)=>{
+ try{
+  if(!/^\d+$/.test(req.params.id))return res.status(400).json({error:'잘못된 프로젝트 번호'});
+  const g=await query('SELECT * FROM project_groups WHERE id=$1',[req.params.id]);
+  if(!g.rowCount)return res.status(404).json({error:'프로젝트를 찾을 수 없습니다.'});
+  const notices=await query(`SELECT p.id,p.name AS notice_title,p.building_type,p.stage,p.estimated_cost,p.source_url,p.owner,p.address,
+    COALESCE(json_agg(json_build_object('role',c.role,'organization',c.organization,'department',c.department,'person_name',c.person_name,'phone',c.phone,'email',c.email,'source',c.source,'source_url',c.source_url,'verified_at',c.verified_at,'updated_at',c.updated_at)) FILTER (WHERE c.id IS NOT NULL),'[]'::json) AS contacts
+    FROM projects p LEFT JOIN project_contacts c ON c.project_id=p.id
+    WHERE p.project_group_id=$1 GROUP BY p.id ORDER BY p.updated_at DESC`,[req.params.id]);
+  const contacts=await query('SELECT role,organization,department,person_name,phone,email,source,source_url,verified_at,updated_at FROM project_group_contacts WHERE group_id=$1 ORDER BY role,updated_at DESC',[req.params.id]);
+  res.json({...g.rows[0],notices:notices.rows,contacts:contacts.rows});
+ }catch(e){res.status(500).json({error:e.message});}
+});
+// Read-only monitoring: does not regroup or mutate existing notices.
+app.get('/api/admin/project-groups/health',loadUser,requireAdminRole,async(req,res)=>{
+ try{
+  const summary=await query(`SELECT
+    (SELECT COUNT(*)::int FROM projects WHERE source='g2b_bid') AS total_notices,
+    (SELECT COUNT(*)::int FROM project_groups) AS total_groups,
+    (SELECT COUNT(*)::int FROM projects WHERE source='g2b_bid' AND project_group_id IS NOT NULL) AS linked_notices,
+    (SELECT COUNT(*)::int FROM projects WHERE source='g2b_bid' AND project_group_id IS NULL) AS unlinked_notices,
+    (SELECT COUNT(*)::int FROM project_groups g WHERE EXISTS(SELECT 1 FROM projects p WHERE p.project_group_id=g.id)) AS active_groups`);
+  const recent=await query(`SELECT id,name,owner,region,address,updated_at
+    FROM projects WHERE source='g2b_bid' AND project_group_id IS NULL
+    ORDER BY updated_at DESC NULLS LAST,id DESC LIMIT 40`);
+  const candidates=recent.rows.map(p=>{
+    const identity=projectGroupIdentity({...p,source:'g2b_bid'});
+    return {id:p.id,name:p.name,owner:p.owner,region:p.region,updated_at:p.updated_at,
+      matchable:!!identity,reason:identity?'통합 규칙 충족 (아직 연결되지 않음)':'보수적 매칭 기준 미충족'};
+  });
+  res.json({summary:summary.rows[0],recent_unlinked:candidates,
+    note:'통합 기준은 공고명 말미 공종, 발주처, 지역 및 위치 일치입니다. 이 화면은 읽기 전용입니다.'});
+ }catch(e){res.status(500).json({error:e.message});}
+});
+
+// Preview matching decisions without writing any data.
+app.get('/api/admin/project-groups/preview',loadUser,requireAdminRole,async(req,res)=>{
+ try{
+  const limit=Math.min(100,Math.max(1,Number.parseInt(req.query.limit,10)||40));
+  const cursor=Math.max(0,Number.parseInt(req.query.cursor,10)||0);
+  const r=await query(`SELECT id,source,name,owner,address,region
+    FROM projects WHERE source='g2b_bid' AND project_group_id IS NULL AND id>$1
+    ORDER BY id LIMIT $2`,[cursor,limit]);
+  const identities=r.rows.map(p=>({p,identity:projectGroupIdentity(p)}));
+  const keys=[...new Set(identities.filter(x=>x.identity).map(x=>x.identity.key))];
+  const found=keys.length?await query('SELECT id,group_key,title FROM project_groups WHERE group_key=ANY($1::text[])',[keys]):{rows:[]};
+  const existing=new Map(found.rows.map(g=>[g.group_key,g]));
+  const occurrences=new Map();
+  for(const {identity} of identities){if(identity)occurrences.set(identity.key,(occurrences.get(identity.key)||0)+1);}
+  const rows=identities.map(({p,identity})=>{
+    const group=identity?existing.get(identity.key):null;
+    return {id:p.id,notice_name:p.name,owner:p.owner,region:p.region,
+      proposed_group_name:identity?.title||null,existing_group_id:group?.id||null,
+      status:!identity?'manual_review':group?'existing_group':occurrences.get(identity.key)>1?'new_group_candidate':'unmatched_candidate',
+      explanation:!identity?'명칭·공종·발주처·위치 등 필수 기준 미충족':group?'동일 식별키를 가진 기존 그룹 존재':'기존 그룹 없음: 자동 병합 전 검토 필요'};
+  });
+  res.json({rows,processed:rows.length,next_cursor:r.rows.length?r.rows[r.rows.length-1].id:cursor,done:r.rows.length<limit,read_only:true,
+    warning:'이 미리보기는 DB를 변경하지 않습니다. 같은 페이지에 없는 공고는 후보 집계에 포함되지 않습니다.'});
+ }catch(e){res.status(500).json({error:e.message});}
+});
+
+// Explicit admin approval: only a strict identity-key match to an existing group is accepted.
+app.post('/api/admin/project-groups/approve',loadUser,requireAdminRole,async(req,res)=>{
+ try{
+  const noticeId=Number(req.body?.notice_id),groupId=Number(req.body?.group_id);
+  if(!Number.isSafeInteger(noticeId)||noticeId<=0||!Number.isSafeInteger(groupId)||groupId<=0)
+    return res.status(400).json({error:'유효한 공고 ID와 프로젝트 ID가 필요합니다.'});
+  const p=await query('SELECT id,source,name,owner,address,region,project_group_id FROM projects WHERE id=$1',[noticeId]);
+  if(!p.rowCount)return res.status(404).json({error:'공고를 찾을 수 없습니다.'});
+  if(p.rows[0].project_group_id!==null)return res.status(409).json({error:'이미 연결된 공고입니다. 변경하지 않았습니다.'});
+  const identity=projectGroupIdentity(p.rows[0]);
+  if(!identity)return res.status(422).json({error:'엄격한 자동 매칭 기준을 충족하지 않습니다. 연결하지 않았습니다.'});
+  const updated=await query(`UPDATE projects AS p SET project_group_id=g.id
+    FROM project_groups AS g
+    WHERE p.id=$1 AND p.source='g2b_bid' AND p.project_group_id IS NULL
+      AND g.id=$2 AND g.group_key=$3
+    RETURNING p.id,p.project_group_id`,[noticeId,groupId,identity.key]);
+  if(!updated.rowCount)return res.status(409).json({error:'그룹 식별키 불일치 또는 다른 관리자가 먼저 변경했습니다. 다시 조회하세요.'});
+  console.info('Project group approved', {noticeId,groupId,adminId:req.user?.id});
+  res.json({ok:true,notice_id:noticeId,group_id:groupId});
+ }catch(e){res.status(500).json({error:e.message});}
+});
+
+// Store only attributable, manually reviewed public organization details.
+app.post('/api/admin/project-groups/:id/contacts',loadUser,requireAdminRole,async(req,res)=>{
+ try{
+  const groupId=Number(req.params.id);
+  if(!Number.isSafeInteger(groupId)||groupId<=0)return res.status(400).json({error:'잘못된 프로젝트 ID'});
+  const role=String(req.body?.role||'').trim();
+  const organization=String(req.body?.organization||'').trim().slice(0,200);
+  const department=String(req.body?.department||'').trim().slice(0,120)||null;
+  const personName=String(req.body?.person_name||'').trim().slice(0,100)||null;
+  const phone=String(req.body?.phone||'').trim().slice(0,80)||null;
+  const email=String(req.body?.email||'').trim().slice(0,200)||null;
+  const sourceUrl=String(req.body?.source_url||'').trim().slice(0,1000);
+  if(!['client','designer','supervisor','contractor'].includes(role)||!organization)
+    return res.status(400).json({error:'참여기관 유형과 기관명은 필수입니다.'});
+  let url;
+  try{url=new URL(sourceUrl);}catch{return res.status(400).json({error:'근거가 되는 공개자료 URL을 입력하세요.'});}
+  if(!['http:','https:'].includes(url.protocol)||!url.hostname.includes('.'))
+    return res.status(400).json({error:'HTTP(S) 공개자료 URL만 허용됩니다.'});
+  if(email&&!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
+    return res.status(400).json({error:'이메일 형식을 확인하세요.'});
+  const g=await query('SELECT id FROM project_groups WHERE id=$1',[groupId]);
+  if(!g.rowCount)return res.status(404).json({error:'프로젝트를 찾을 수 없습니다.'});
+  const result=await query(`INSERT INTO project_group_contacts
+    (group_id,role,organization,department,person_name,phone,email,source,source_url)
+    VALUES($1,$2,$3,$4,$5,$6,$7,'manual_public',$8)
+    ON CONFLICT(group_id,role,organization,source) DO UPDATE SET
+      department=EXCLUDED.department,person_name=EXCLUDED.person_name,
+      phone=EXCLUDED.phone,email=EXCLUDED.email,source_url=EXCLUDED.source_url,
+      verified_at=NULL,updated_at=NOW()
+    RETURNING id,group_id,role,organization,source,source_url,verified_at`,
+    [groupId,role,organization,department,personName,phone,email,url.href]);
+  res.status(201).json({ok:true,contact:result.rows[0],note:'출처 URL이 등록되었습니다. 실제 내용의 검증 완료를 의미하지 않습니다.'});
+ }catch(e){res.status(500).json({error:e.message});}
+});
+
+app.post('/api/admin/project-groups/backfill',loadUser,requireAdminRole,async(req,res)=>{
+ try{
+  const limit=Math.min(500,Math.max(1,parseInt(req.body?.limit,10)||200));
+  const cursor=Math.max(0,parseInt(req.body?.cursor,10)||0);
+  const r=await query(`SELECT id,source,name,owner,address,region FROM projects
+    WHERE source='g2b_bid' AND id>$1 ORDER BY id LIMIT $2`,[cursor,limit]);
+  let linked=0,unmatched=0,errors=0;
+  for(const p of r.rows){try{if(await linkProjectGroup(p))linked++;else unmatched++;}catch(e){errors++;console.warn('Group backfill:',p.id,e.message);}}
+  res.json({processed:r.rows.length,linked,unmatched,errors,nextCursor:r.rows.length?r.rows[r.rows.length-1].id:cursor,done:r.rows.length<limit});
+ }catch(e){res.status(500).json({error:e.message});}
+});
+
+app.get("/api/projects/:id", async (req, res) => {
+  try {
+    const r = await query("SELECT * FROM projects WHERE id=$1", [req.params.id]);
+    if (!r.rowCount) return res.status(404).json({ error: "현장을 찾을 수 없습니다." });
+    const f = await query("SELECT id FROM favorites WHERE project_id=$1 AND user_key=$2", [req.params.id, String(req.user.id)]);
+    const s = await query("SELECT status,note FROM sales_pipeline WHERE project_id=$1 AND user_key=$2", [req.params.id, String(req.user.id)]);
+    const contacts = await query(`SELECT role,organization,department,person_name,phone,email,source,source_url,verified_at,updated_at
+      FROM project_contacts WHERE project_id=$1 ORDER BY CASE role WHEN 'client' THEN 1 WHEN 'designer' THEN 2 WHEN 'supervisor' THEN 3 ELSE 4 END, updated_at DESC`,[req.params.id]);
+    res.json({ ...r.rows[0], contacts: contacts.rows, favorite: !!f.rowCount, pipeline: s.rows[0] || { status: "NEW", note: "" } });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post("/api/projects/:id/favorite", async (req, res) => {
+  try {
+    const exists = await query("SELECT id FROM favorites WHERE project_id=$1 AND user_key=$2", [req.params.id, String(req.user.id)]);
+    if (exists.rowCount) await query("DELETE FROM favorites WHERE project_id=$1 AND user_key=$2", [req.params.id, String(req.user.id)]);
+    else await query("INSERT INTO favorites(project_id,user_key) VALUES($1,$2) ON CONFLICT DO NOTHING", [req.params.id, String(req.user.id)]);
+    res.json({ favorite: !exists.rowCount });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.put("/api/projects/:id/pipeline", async (req, res) => {
+  try {
+    const status = String(req.body.status || "NEW").slice(0, 30);
+    const note = String(req.body.note || "").slice(0, 2000);
+    await query(`INSERT INTO sales_pipeline(project_id,user_key,status,note) VALUES($1,$2,$3,$4)
+      ON CONFLICT(project_id,user_key) DO UPDATE SET status=EXCLUDED.status,note=EXCLUDED.note,updated_at=NOW()`, [req.params.id, String(req.user.id), status, note]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get("/api/recommendations", async (req, res) => {
+  try {
+    const key = profiles[req.query.profile] ? req.query.profile : "automation";
+    const rows = await query("SELECT * FROM projects ORDER BY updated_at DESC LIMIT 500");
+    const ranked = rows.rows.map(x => ({ ...x, score: scoreProject(x, key), profile: profiles[key].label }))
+      .sort((a,b) => b.score - a.score).slice(0, 100);
+    res.json({ profile: profiles[key].label, rows: ranked });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get("/api/favorites", async (req, res) => {
+  try {
+    const r = await query(`SELECT p.* FROM projects p JOIN favorites f ON f.project_id=p.id WHERE f.user_key=$1 ORDER BY f.created_at DESC`, [String(req.user.id)]);
+    res.json({ rows: r.rows });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get("/api/export.csv", async (req, res) => {
+  try {
+    const r = await query(`SELECT name AS "현장명",address AS "주소",region AS "시도",district AS "시군구",building_type AS "건물용도",stage AS "진행단계",permit_date AS "허가일",start_date AS "착공일",completion_date AS "사용승인일",owner AS "건축주/발주처",designer AS "설계사",supervisor AS "감리사",contractor AS "시공사",area_sqm AS "연면적" FROM projects ORDER BY updated_at DESC LIMIT 20000`);
+    const headers = Object.keys(r.rows[0] || { "현장명": "" });
+    const csv = [headers.join(","), ...r.rows.map(row => headers.map(h => `"${String(row[h] ?? "").replace(/"/g, '""')}"`).join(","))].join("\r\n");
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", "attachment; filename=build-signal-projects.csv");
+    res.send("\uFEFF" + csv);
+  } catch (e) { res.status(500).send(e.message); }
+});
+
+app.post("/api/ingest/projects", requireAdminRole, requireAdmin, async (req, res) => {
+  const source = String(req.body.source || "external").slice(0, 200);
+  const projects = Array.isArray(req.body.projects) ? req.body.projects.slice(0, 5000) : [];
+  let inserted = 0;
+  try {
+    for (const p of projects) {
+      if (!p.name) continue;
+      const values = [
+        source, p.externalId || null, p.name, p.address || null, p.region || null, p.district || null,
+        p.buildingType || null, STAGES.includes(p.stage) ? p.stage : "UNKNOWN",
+        normalizeDate(p.permitDate), normalizeDate(p.startDate), normalizeDate(p.completionDate),
+        p.floorsAbove || null, p.floorsBelow || null, p.areaSqm || null, p.estimatedCost || null,
+        p.owner || null, p.designer || null, p.supervisor || null, p.contractor || null,
+        p.sourceUrl || null, normalizeDate(p.sourceUpdatedAt)
+      ];
+      const result = await query(`INSERT INTO projects(source,external_id,name,address,region,district,building_type,stage,permit_date,start_date,completion_date,floors_above,floors_below,area_sqm,estimated_cost,owner,designer,supervisor,contractor,source_url,source_updated_at)
+        VALUES(${values.map((_,i)=>`$${i+1}`).join(",")})
+        ON CONFLICT(source,external_id) DO UPDATE SET name=EXCLUDED.name,address=EXCLUDED.address,region=EXCLUDED.region,district=EXCLUDED.district,building_type=EXCLUDED.building_type,stage=EXCLUDED.stage,permit_date=EXCLUDED.permit_date,start_date=EXCLUDED.start_date,completion_date=EXCLUDED.completion_date,owner=EXCLUDED.owner,designer=EXCLUDED.designer,supervisor=EXCLUDED.supervisor,source_url=EXCLUDED.source_url,source_updated_at=EXCLUDED.source_updated_at,updated_at=NOW()
+        RETURNING (xmax = 0) AS inserted`, values);
+      if (result.rows[0]?.inserted) inserted++;
+    }
+    await query("INSERT INTO ingest_logs(source,received_count,inserted_count,status,message) VALUES($1,$2,$3,'SUCCESS','Ingest completed')", [source, projects.length, inserted]);
+    res.json({ ok: true, received: projects.length, insertedOrUpdated: projects.length, inserted });
+  } catch (e) {
+    await query("INSERT INTO ingest_logs(source,received_count,inserted_count,status,message) VALUES($1,$2,$3,'ERROR',$4)", [source, projects.length, inserted, e.message]).catch(()=>{});
+    res.status(500).json({ error: e.message, insertedBeforeError: inserted });
+  }
+});
+
+app.get("/api/admin/ingest-logs", requireAdmin, async (req,res) => {
+  const r = await query("SELECT * FROM ingest_logs ORDER BY created_at DESC LIMIT 100");
+  res.json({ rows: r.rows });
+});
+
+app.post("/api/admin/demo-seed", requireAdmin, async (req,res) => {
+  const demo = [
+    ["DEMO-001","강남 업무시설 신축 프로젝트","서울특별시 강남구 테헤란로","서울특별시","강남구","업무시설","PERMIT","2026-10-12",null,null,22,5,28000,"가상 건축주 A","가상 설계사 B","가상 감리사 C",null],
+    ["DEMO-002","부산 해운대 호텔 신축 프로젝트","부산광역시 해운대구 해운대로","부산광역시","해운대구","숙박시설","STARTED","2026-06-03","2026-09-18",null,18,3,19000,"가상 시행사 D","가상 설계사 E","가상 감리사 F","가상 시공사 G"],
+    ["DEMO-003","인천 물류센터 증축 프로젝트","인천광역시 서구 산업로","인천광역시","서구","창고시설","BID","2026-10-29",null,null,4,1,14000,"가상 발주처 H",null,null,null],
+    ["DEMO-004","제주 리조트 신축 프로젝트","제주특별자치도 서귀포시 중문관광로","제주특별자치도","서귀포시","숙박시설","PERMIT","2026-10-20",null,null,12,2,16000,"가상 건축주 I","가상 설계사 J","가상 감리사 K",null],
+    ["DEMO-005","대전 연구시설 신축 프로젝트","대전광역시 유성구 대학로","대전광역시","유성구","교육연구시설","COMPLETED","2026-03-10","2026-05-01","2026-10-25",10,2,11000,"가상 기관 L","가상 설계사 M","가상 감리사 N","가상 시공사 O"]
+  ];
+  let n=0;
+  for (const d of demo) {
+    await query(`INSERT INTO projects(source,external_id,name,address,region,district,building_type,stage,permit_date,start_date,completion_date,floors_above,floors_below,area_sqm,owner,designer,supervisor,contractor)
+      VALUES('demo',$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+      ON CONFLICT(source,external_id) DO NOTHING`, d);
+    n++;
+  }
+  res.json({ ok:true, attempted:n, notice:"데모 데이터는 실제 현장정보가 아닙니다." });
+});
+
+app.get("/login", (req,res)=>res.sendFile(path.join(__dirname,"..","public","login.html")));
+async function start() {
+  await initDb();
+  if (process.env.ADMIN_EMAIL && process.env.ADMIN_PASSWORD) {
+    const email=String(process.env.ADMIN_EMAIL).trim().toLowerCase();
+    const hash=await bcrypt.hash(String(process.env.ADMIN_PASSWORD),12);
+    await query(`INSERT INTO users(email,password_hash,company_name,contact_name,role,status,approved_at)
+      VALUES($1,$2,'BUILD SIGNAL 운영팀','관리자','admin','approved',NOW())
+      ON CONFLICT(email) DO UPDATE SET password_hash=EXCLUDED.password_hash,role='admin',status='approved'`,[email,hash]);
+  }
+  const port = process.env.PORT || 10000;
+  app.listen(port, () => console.log(`BUILD SIGNAL listening on ${port}`));
+}
+start().catch(e => { console.error("Startup failed:", e); process.exit(1); });
+ THEN (job_data->>'inserted')::int ELSE 0 END AS inserted,
+    CASE WHEN (job_data->>'updated') ~ '^[0-9]+,async(req,res)=>{try{const result=await query("SELECT id,status,job_data,created_at,updated_at FROM permit_ingest_jobs ORDER BY id DESC LIMIT 30");res.json({jobs:result.rows});}catch(e){res.status(500).json({error:e.message});}});
+app.get('/api/admin/permits/progress',loadUser,requireAdminRole,(req,res)=>res.json({job:permitJob}));
+
+
+app.post('/api/admin/permits/recover',loadUser,requireAdminRole,async(req,res)=>{
+ if(!process.env.ARCH_HUB_SERVICE_KEY)return res.status(400).json({error:'ARCH_HUB_SERVICE_KEY 미설정'});
+ if(permitJob?.status==='running')return res.status(409).json({error:'현재 수집 작업이 진행 중입니다.'});
+ try{
+  const result=await query("SELECT id,job_data FROM permit_ingest_jobs WHERE status IN ('failed','partial') ORDER BY id DESC LIMIT 30");
+  const found=result.rows.find(row=>Array.isArray(row.job_data?.failedWindows)&&row.job_data.failedWindows.length);
+  if(!found)return res.status(404).json({error:'DB에 재수집 가능한 실패 구간이 없습니다.'});
+  const failed=found.job_data.failedWindows;
+  if(failed.length>500)return res.status(400).json({error:'실패 구간이 너무 많습니다.'});
+  const retry=failed.filter(w=>/^\d{5}$/.test(String(w.sigunguCd||''))&&/^\d{5}$/.test(String(w.bjdongCd||''))&&permitDate(w.startDate)&&permitDate(w.endDate)&&w.startDate<=w.endDate);
+  if(!retry.length)return res.status(400).json({error:'유효한 실패 구간이 없습니다.'});
+  permitJob={status:'running',received:0,inserted:0,updated:0,skipped:0,pages:0,completedWindows:0,totalWindows:retry.length,errors:[],failedWindows:[],recoveredFrom:String(found.id),startedAt:new Date().toISOString()};
+  const job=permitJob;
+  void (async()=>{
+   await savePermitJob(job);
+   for(const opts of retry){
+    const child={status:'running',received:0,inserted:0,updated:0,skipped:0,pages:0,total:0};
+    await permitSync(child,opts);
+    for(const k of ['received','inserted','updated','skipped','pages'])job[k]+=child[k];
+    job.completedWindows++;
+    if(child.status!=='completed'){job.errors.push(opts.sigunguCd+'/'+opts.bjdongCd+' '+opts.startDate+'~'+opts.endDate+': '+(child.error||'오류'));job.failedWindows.push(opts);}
+    await savePermitJob(job);
+   }
+   job.status=job.failedWindows.length?(job.failedWindows.length===retry.length?'failed':'partial'):'completed';
+   job.finishedAt=new Date().toISOString();
+   await savePermitJob(job);
+  })().catch(async e=>{job.status='failed';job.error=String(e.message).slice(0,200);job.finishedAt=new Date().toISOString();await savePermitJob(job);});
+  res.status(202).json({job,sourceJobId:String(found.id)});
+ }catch(e){res.status(500).json({error:'저장된 실패 구간 조회 실패: '+e.message});}
+});
+
+app.post('/api/admin/permits/retry',loadUser,requireAdminRole,(req,res)=>{
+ if(!process.env.ARCH_HUB_SERVICE_KEY)return res.status(400).json({error:'ARCH_HUB_SERVICE_KEY 미설정'});
+ if(!permitJob||permitJob.status==='running')return res.status(409).json({error:'재시도 가능한 완료 작업이 없습니다.'});
+ const failed=Array.isArray(permitJob.failedWindows)?permitJob.failedWindows:[];
+ if(!failed.length)return res.status(400).json({error:'재시도할 실패 구간이 없습니다.'});
+ if(failed.length>500)return res.status(400).json({error:'실패 구간이 너무 많습니다.'});
+ const retry=failed.map(w=>({...w}));
+ permitJob={status:'running',received:0,inserted:0,updated:0,skipped:0,pages:0,completedWindows:0,totalWindows:retry.length,errors:[],failedWindows:[],startedAt:new Date().toISOString(),retry:true};
+ const job=permitJob;
+ void (async()=>{await savePermitJob(job);
+  for(const opts of retry){
+   const child={status:'running',received:0,inserted:0,updated:0,skipped:0,pages:0,total:0};
+   await permitSync(child,opts);
+   for(const k of ['received','inserted','updated','skipped','pages'])job[k]+=child[k];
+   job.completedWindows++;
+   await savePermitJob(job);
+   if(child.status!=='completed'){job.errors.push(opts.sigunguCd+'/'+opts.bjdongCd+' '+opts.startDate+'~'+opts.endDate+': '+(child.error||'오류'));job.failedWindows.push(opts);}
+  }
+  job.status=job.failedWindows.length?(job.failedWindows.length===retry.length?'failed':'partial'):'completed';
+  job.finishedAt=new Date().toISOString();await savePermitJob(job);
+ })().catch(e=>{job.status='failed';job.error=String(e.message).slice(0,200);job.finishedAt=new Date().toISOString();});
+ res.status(202).json({job});
+});
+
+
+app.post('/api/admin/permits/windowed',loadUser,requireAdminRole,(req,res)=>{
+ if(!process.env.ARCH_HUB_SERVICE_KEY)return res.status(400).json({error:'ARCH_HUB_SERVICE_KEY 미설정'});
+ if(permitJob?.status==='running')return res.status(409).json({error:'이미 수집 중입니다.'});
+ const {regions,startDate,endDate}=req.body||{};
+ if(!Array.isArray(regions)||regions.length<1||regions.length>20)return res.status(400).json({error:'지역은 1~20개까지 지정하세요.'});
+ const unique=[...new Map(regions.map(r=>({sigunguCd:String(r?.sigunguCd||''),bjdongCd:String(r?.bjdongCd||'')})).map(r=>[r.sigunguCd+':'+r.bjdongCd,r])).values()];
+ if(unique.some(r=>!/^\d{5}$/.test(r.sigunguCd)||!/^\d{5}$/.test(r.bjdongCd)))return res.status(400).json({error:'지역코드는 5자리 숫자여야 합니다.'});
+ if(!permitDate(startDate)||!permitDate(endDate)||startDate>endDate)return res.status(400).json({error:'날짜는 YYYYMMDD 형식이어야 합니다.'});
+ const start=Date.parse(permitDate(startDate)),end=Date.parse(permitDate(endDate));
+ if(end-start>365*86400000)return res.status(400).json({error:'한 번에 최대 1년까지만 조회할 수 있습니다.'});
+ const windows=[];
+ for(let from=start;from<=end;from+=30*86400000){
+  const to=Math.min(from+29*86400000,end);
+  const compact=t=>new Date(t).toISOString().slice(0,10).replace(/-/g,'');
+  windows.push({startDate:compact(from),endDate:compact(to)});
+ }
+ permitJob={status:'running',received:0,inserted:0,updated:0,skipped:0,pages:0,completedWindows:0,totalWindows:windows.length*unique.length,errors:[],failedWindows:[],startedAt:new Date().toISOString()};
+ const job=permitJob;
+ void (async()=>{await savePermitJob(job);
+  for(const region of unique)for(const window of windows){
+   const child={status:'running',received:0,inserted:0,updated:0,skipped:0,pages:0,total:0};
+   await permitSync(child,{...region,...window});
+   for(const k of ['received','inserted','updated','skipped','pages'])job[k]+=child[k];
+   job.completedWindows++;
+   await savePermitJob(job);
+   if(child.status!=='completed'){job.errors.push(region.sigunguCd+'/'+region.bjdongCd+' '+window.startDate+'~'+window.endDate+': '+(child.error||'오류'));job.failedWindows.push({...region,...window});}
+  }
+  job.status=job.errors.length?(job.errors.length===job.totalWindows?'failed':'partial'):'completed';
+  job.finishedAt=new Date().toISOString();await savePermitJob(job);
+ })().catch(e=>{job.status='failed';job.error=String(e.message).slice(0,200);job.finishedAt=new Date().toISOString();});
+ res.status(202).json({job});
+});
+
+
+app.post('/api/admin/permits/batch',loadUser,requireAdminRole,(req,res)=>{
+ if(!process.env.ARCH_HUB_SERVICE_KEY)return res.status(400).json({error:'ARCH_HUB_SERVICE_KEY 미설정'});
+ if(permitJob?.status==='running')return res.status(409).json({error:'이미 수집 중입니다.'});
+ const {regions,startDate,endDate}=req.body||{};
+ if(!Array.isArray(regions)||regions.length<1||regions.length>20)return res.status(400).json({error:'지역은 한 번에 1~20개까지 지정할 수 있습니다.'});
+ const cleaned=regions.map(r=>({sigunguCd:String(r?.sigunguCd||''),bjdongCd:String(r?.bjdongCd||'')}));
+ if(cleaned.some(r=>!/^\d{5}$/.test(r.sigunguCd)||!/^\d{5}$/.test(r.bjdongCd)))return res.status(400).json({error:'지역코드는 각각 5자리 숫자여야 합니다.'});
+ if(!permitDate(startDate)||!permitDate(endDate)||startDate>endDate)return res.status(400).json({error:'유효한 YYYYMMDD 기간을 지정하세요.'});
+ const days=(Date.parse(permitDate(endDate))-Date.parse(permitDate(startDate)))/86400000;
+ if(days>29)return res.status(400).json({error:'한 번에 최대 30일까지만 수집할 수 있습니다.'});
+ const unique=[...new Map(cleaned.map(r=>[r.sigunguCd+':'+r.bjdongCd,r])).values()];
+ permitJob={status:'running',received:0,inserted:0,updated:0,skipped:0,pages:0,total:0,completedRegions:0,regionCount:unique.length,errors:[],startedAt:new Date().toISOString()};
+ void (async()=>{
+  const aggregate=permitJob;
+  await savePermitJob(aggregate);
+  for(const region of unique){
+   const child={status:'running',received:0,inserted:0,updated:0,skipped:0,pages:0,total:0};
+   await permitSync(child,{...region,startDate,endDate});
+   for(const key of ['received','inserted','updated','skipped','pages'])aggregate[key]+=child[key];
+   aggregate.completedRegions++;
+   await savePermitJob(aggregate);
+   if(child.status!=='completed')aggregate.errors.push(region.sigunguCd+'-'+region.bjdongCd+': '+(child.error||'수집 실패'));
+  }
+  aggregate.status=aggregate.errors.length?(aggregate.completedRegions===aggregate.errors.length?'failed':'partial'):'completed';
+  aggregate.finishedAt=new Date().toISOString();await savePermitJob(aggregate);
+ })().catch(e=>{permitJob.status='failed';permitJob.error=String(e.message).slice(0,200);permitJob.finishedAt=new Date().toISOString();});
+ res.status(202).json({job:permitJob});
+});
+
+
+// 관리자 전용 연락처 확보율과 현장별 담당자 목록
+app.get('/api/admin/contacts/coverage', loadUser, requireAdminRole, async (req,res) => {
+  try {
+    const summary = await query(`SELECT COUNT(*)::int AS total,
+      COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM project_contacts c WHERE c.project_id=p.id AND c.role='client'))::int AS client_org,
+      COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM project_contacts c WHERE c.project_id=p.id AND c.role='client' AND c.phone IS NOT NULL))::int AS client_phone,
+      COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM project_contacts c WHERE c.project_id=p.id AND c.role='client' AND c.email IS NOT NULL))::int AS client_email,
+      COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM project_contacts c WHERE c.project_id=p.id AND c.role='designer'))::int AS designer,
+      COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM project_contacts c WHERE c.project_id=p.id AND c.role='supervisor'))::int AS supervisor,
+      COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM project_contacts c WHERE c.project_id=p.id AND c.role='contractor'))::int AS contractor
+      FROM projects p WHERE p.source='g2b_bid'`);
+    const contacts = await query(`SELECT p.id AS project_id,p.name AS project_name,c.role,c.organization,c.department,c.person_name,c.phone,c.email,c.source,c.source_url
+      FROM project_contacts c JOIN projects p ON p.id=c.project_id WHERE p.source='g2b_bid'
+      ORDER BY c.updated_at DESC LIMIT 100`);
+    res.json({summary:summary.rows[0],contacts:contacts.rows});
+  } catch(e) {res.status(500).json({error:e.message});}
+});
+app.get("/api/dashboard", async (req, res) => {
+  try {
+    const total = await query("SELECT COUNT(*)::int AS n FROM projects");
+    const byStage = await query("SELECT stage, COUNT(*)::int AS n FROM projects GROUP BY stage");
+    const recent = await query("SELECT * FROM projects ORDER BY updated_at DESC LIMIT 6");
+    const favorites = await query("SELECT COUNT(*)::int AS n FROM favorites WHERE user_key=$1", [String(req.user.id)]);
+    res.json({ total: total.rows[0].n, byStage: byStage.rows, recent: recent.rows, favorites: favorites.rows[0].n, demo: process.env.DATA_SOURCE_MODE === "demo" });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// 회원 화면: 프로젝트명 우선 검색, 연락처 확보 여부 및 공종 필터
+app.get("/api/projects", async (req, res) => {
+  try {
+    const { q = "", region = "", stage = "", type = "", contact = "", dateField = "event", from = "", to = "", page = "1", limit = "30" } = req.query;
+    const p = Math.max(1, Number(page) || 1), l = Math.min(100, Math.max(1, Number(limit) || 30));
+    const params = [], where = [];
+    function add(v, sql) { where.push(sql.replace(/\?/g, () => { params.push(v); return `$${params.length}`; })); }
+    const keyword = String(q).trim().slice(0,120);
+    if (keyword) add(`%${keyword}%`, "(p.name ILIKE ? OR p.address ILIKE ? OR p.owner ILIKE ? OR p.designer ILIKE ? OR p.contractor ILIKE ? OR EXISTS (SELECT 1 FROM project_contacts pc WHERE pc.project_id=p.id AND (pc.organization ILIKE ? OR pc.person_name ILIKE ?)))");
+    if (region) add(`%${String(region).slice(0,60)}%`, "p.region ILIKE ?");
+    if (stage) add(String(stage).slice(0,30), "p.stage = ?");
+    if (type) add(`%${String(type).slice(0,80)}%`, "p.building_type ILIKE ?");
+    if (contact === 'any') where.push("EXISTS (SELECT 1 FROM project_contacts pc WHERE pc.project_id=p.id)");
+    if (['client','designer','supervisor','contractor'].includes(contact)) add(contact, "EXISTS (SELECT 1 FROM project_contacts pc WHERE pc.project_id=p.id AND pc.role=?)");
+    const dateColumn = dateField === "collected" ? "p.created_at::date" : "CASE WHEN p.stage = 'PERMIT' THEN p.permit_date WHEN p.stage = 'STARTED' THEN p.start_date WHEN p.stage = 'BID' THEN p.source_updated_at ELSE COALESCE(p.permit_date,p.start_date,p.source_updated_at) END";
+    for (const [value,op] of [[from,">="],[to,"<="]]) {
+      if (!value) continue;
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(String(value)) || !Number.isFinite(Date.parse(String(value)))) return res.status(400).json({error:"날짜 형식은 YYYY-MM-DD이어야 합니다."});
+      add(String(value), `(${dateColumn}) ${op} ?::date`);
+    }
+    if(from && to && from>to)return res.status(400).json({error:"시작일이 종료일보다 늦습니다."});
+    const clause = where.length ? `WHERE ${where.join(" AND ")}` : "";
+    const count = await query(`SELECT COUNT(*)::int AS n FROM projects p ${clause}`, params);
+    const rows = await query(`SELECT p.*,
+      (SELECT COUNT(*)::int FROM project_contacts pc WHERE pc.project_id=p.id) AS contact_count,
+      EXISTS(SELECT 1 FROM project_contacts pc WHERE pc.project_id=p.id AND pc.phone IS NOT NULL AND pc.phone<>'') AS has_phone,
+      EXISTS(SELECT 1 FROM project_contacts pc WHERE pc.project_id=p.id AND pc.email IS NOT NULL AND pc.email<>'') AS has_email
+      FROM projects p ${clause}
+      ORDER BY CASE WHEN $${params.length+1}::text <> '' AND p.name ILIKE $${params.length+2} THEN 0 ELSE 1 END,
+        p.updated_at DESC LIMIT $${params.length+3} OFFSET $${params.length+4}`,
+      [...params, keyword, `${keyword}%`, l, (p-1)*l]);
+    res.json({rows:rows.rows,total:count.rows[0].n,page:p,pages:Math.ceil(count.rows[0].n/l)});
+  } catch(e) {res.status(500).json({error:e.message});}
+});
+
+app.get('/api/contacts/summary', async (req,res) => {
+  try {
+    const r=await query(`SELECT COUNT(*)::int AS total,
+      COUNT(*) FILTER (WHERE EXISTS(SELECT 1 FROM project_contacts c WHERE c.project_id=p.id AND c.role='client'))::int AS client,
+      COUNT(*) FILTER (WHERE EXISTS(SELECT 1 FROM project_contacts c WHERE c.project_id=p.id AND c.role='designer'))::int AS designer,
+      COUNT(*) FILTER (WHERE EXISTS(SELECT 1 FROM project_contacts c WHERE c.project_id=p.id AND c.role='supervisor'))::int AS supervisor,
+      COUNT(*) FILTER (WHERE EXISTS(SELECT 1 FROM project_contacts c WHERE c.project_id=p.id AND c.role='contractor'))::int AS contractor,
+      COUNT(*) FILTER (WHERE EXISTS(SELECT 1 FROM project_contacts c WHERE c.project_id=p.id AND c.phone IS NOT NULL AND c.phone<>''))::int AS phone,
+      COUNT(*) FILTER (WHERE EXISTS(SELECT 1 FROM project_contacts c WHERE c.project_id=p.id AND c.email IS NOT NULL AND c.email<>''))::int AS email
+      FROM projects p WHERE p.source='g2b_bid'`);
+    res.json(r.rows[0]);
+  } catch(e){res.status(500).json({error:e.message});}
+});
+
+app.get('/api/project-groups', async(req,res)=>{
+ try{
+  const q=String(req.query.q||'').slice(0,120), region=String(req.query.region||'').slice(0,80);
+  const trade=String(req.query.trade||'').slice(0,60);
+  const page=Math.max(1,parseInt(req.query.page,10)||1);
+  const limit=24;
+  const where=['1=1'],args=[];
+  if(q){args.push('%'+q+'%');where.push(`(g.title ILIKE $${args.length} OR g.owner ILIKE $${args.length})`);}
+  if(region){args.push('%'+region+'%');where.push(`g.region ILIKE $${args.length}`);}
+  if(trade){args.push('%'+trade+'%');where.push(`EXISTS(SELECT 1 FROM projects p WHERE p.project_group_id=g.id AND p.building_type ILIKE $${args.length})`);}
+  const clause=where.join(' AND ');
+  const total=await query(`SELECT COUNT(*)::int AS n FROM project_groups g WHERE ${clause}`,args);
+  const rows=await query(`SELECT g.id,g.title,g.owner,g.region,g.location,
+    COUNT(DISTINCT p.id)::int AS notice_count,
+    COUNT(DISTINCT p.building_type)::int AS trade_count,
+    COUNT(DISTINCT c.id)::int AS contact_count,
+    MAX(p.updated_at) AS latest_notice
+    FROM project_groups g JOIN projects p ON p.project_group_id=g.id
+    LEFT JOIN project_contacts c ON c.project_id=p.id
+    WHERE ${clause}
+    GROUP BY g.id ORDER BY notice_count DESC,latest_notice DESC
+    LIMIT $${args.length+1} OFFSET $${args.length+2}`,[...args,limit,(page-1)*limit]);
+  res.json({rows:rows.rows,total:total.rows[0].n,page,pages:Math.ceil(total.rows[0].n/limit)});
+ }catch(e){res.status(500).json({error:e.message});}
+});
+app.get('/api/project-groups/:id',async(req,res)=>{
+ try{
+  if(!/^\d+$/.test(req.params.id))return res.status(400).json({error:'잘못된 프로젝트 번호'});
+  const g=await query('SELECT * FROM project_groups WHERE id=$1',[req.params.id]);
+  if(!g.rowCount)return res.status(404).json({error:'프로젝트를 찾을 수 없습니다.'});
+  const notices=await query(`SELECT p.id,p.name AS notice_title,p.building_type,p.stage,p.estimated_cost,p.source_url,p.owner,p.address,
+    COALESCE(json_agg(json_build_object('role',c.role,'organization',c.organization,'department',c.department,'person_name',c.person_name,'phone',c.phone,'email',c.email,'source',c.source,'source_url',c.source_url,'verified_at',c.verified_at,'updated_at',c.updated_at)) FILTER (WHERE c.id IS NOT NULL),'[]'::json) AS contacts
+    FROM projects p LEFT JOIN project_contacts c ON c.project_id=p.id
+    WHERE p.project_group_id=$1 GROUP BY p.id ORDER BY p.updated_at DESC`,[req.params.id]);
+  const contacts=await query('SELECT role,organization,department,person_name,phone,email,source,source_url,verified_at,updated_at FROM project_group_contacts WHERE group_id=$1 ORDER BY role,updated_at DESC',[req.params.id]);
+  res.json({...g.rows[0],notices:notices.rows,contacts:contacts.rows});
+ }catch(e){res.status(500).json({error:e.message});}
+});
+// Read-only monitoring: does not regroup or mutate existing notices.
+app.get('/api/admin/project-groups/health',loadUser,requireAdminRole,async(req,res)=>{
+ try{
+  const summary=await query(`SELECT
+    (SELECT COUNT(*)::int FROM projects WHERE source='g2b_bid') AS total_notices,
+    (SELECT COUNT(*)::int FROM project_groups) AS total_groups,
+    (SELECT COUNT(*)::int FROM projects WHERE source='g2b_bid' AND project_group_id IS NOT NULL) AS linked_notices,
+    (SELECT COUNT(*)::int FROM projects WHERE source='g2b_bid' AND project_group_id IS NULL) AS unlinked_notices,
+    (SELECT COUNT(*)::int FROM project_groups g WHERE EXISTS(SELECT 1 FROM projects p WHERE p.project_group_id=g.id)) AS active_groups`);
+  const recent=await query(`SELECT id,name,owner,region,address,updated_at
+    FROM projects WHERE source='g2b_bid' AND project_group_id IS NULL
+    ORDER BY updated_at DESC NULLS LAST,id DESC LIMIT 40`);
+  const candidates=recent.rows.map(p=>{
+    const identity=projectGroupIdentity({...p,source:'g2b_bid'});
+    return {id:p.id,name:p.name,owner:p.owner,region:p.region,updated_at:p.updated_at,
+      matchable:!!identity,reason:identity?'통합 규칙 충족 (아직 연결되지 않음)':'보수적 매칭 기준 미충족'};
+  });
+  res.json({summary:summary.rows[0],recent_unlinked:candidates,
+    note:'통합 기준은 공고명 말미 공종, 발주처, 지역 및 위치 일치입니다. 이 화면은 읽기 전용입니다.'});
+ }catch(e){res.status(500).json({error:e.message});}
+});
+
+// Preview matching decisions without writing any data.
+app.get('/api/admin/project-groups/preview',loadUser,requireAdminRole,async(req,res)=>{
+ try{
+  const limit=Math.min(100,Math.max(1,Number.parseInt(req.query.limit,10)||40));
+  const cursor=Math.max(0,Number.parseInt(req.query.cursor,10)||0);
+  const r=await query(`SELECT id,source,name,owner,address,region
+    FROM projects WHERE source='g2b_bid' AND project_group_id IS NULL AND id>$1
+    ORDER BY id LIMIT $2`,[cursor,limit]);
+  const identities=r.rows.map(p=>({p,identity:projectGroupIdentity(p)}));
+  const keys=[...new Set(identities.filter(x=>x.identity).map(x=>x.identity.key))];
+  const found=keys.length?await query('SELECT id,group_key,title FROM project_groups WHERE group_key=ANY($1::text[])',[keys]):{rows:[]};
+  const existing=new Map(found.rows.map(g=>[g.group_key,g]));
+  const occurrences=new Map();
+  for(const {identity} of identities){if(identity)occurrences.set(identity.key,(occurrences.get(identity.key)||0)+1);}
+  const rows=identities.map(({p,identity})=>{
+    const group=identity?existing.get(identity.key):null;
+    return {id:p.id,notice_name:p.name,owner:p.owner,region:p.region,
+      proposed_group_name:identity?.title||null,existing_group_id:group?.id||null,
+      status:!identity?'manual_review':group?'existing_group':occurrences.get(identity.key)>1?'new_group_candidate':'unmatched_candidate',
+      explanation:!identity?'명칭·공종·발주처·위치 등 필수 기준 미충족':group?'동일 식별키를 가진 기존 그룹 존재':'기존 그룹 없음: 자동 병합 전 검토 필요'};
+  });
+  res.json({rows,processed:rows.length,next_cursor:r.rows.length?r.rows[r.rows.length-1].id:cursor,done:r.rows.length<limit,read_only:true,
+    warning:'이 미리보기는 DB를 변경하지 않습니다. 같은 페이지에 없는 공고는 후보 집계에 포함되지 않습니다.'});
+ }catch(e){res.status(500).json({error:e.message});}
+});
+
+// Explicit admin approval: only a strict identity-key match to an existing group is accepted.
+app.post('/api/admin/project-groups/approve',loadUser,requireAdminRole,async(req,res)=>{
+ try{
+  const noticeId=Number(req.body?.notice_id),groupId=Number(req.body?.group_id);
+  if(!Number.isSafeInteger(noticeId)||noticeId<=0||!Number.isSafeInteger(groupId)||groupId<=0)
+    return res.status(400).json({error:'유효한 공고 ID와 프로젝트 ID가 필요합니다.'});
+  const p=await query('SELECT id,source,name,owner,address,region,project_group_id FROM projects WHERE id=$1',[noticeId]);
+  if(!p.rowCount)return res.status(404).json({error:'공고를 찾을 수 없습니다.'});
+  if(p.rows[0].project_group_id!==null)return res.status(409).json({error:'이미 연결된 공고입니다. 변경하지 않았습니다.'});
+  const identity=projectGroupIdentity(p.rows[0]);
+  if(!identity)return res.status(422).json({error:'엄격한 자동 매칭 기준을 충족하지 않습니다. 연결하지 않았습니다.'});
+  const updated=await query(`UPDATE projects AS p SET project_group_id=g.id
+    FROM project_groups AS g
+    WHERE p.id=$1 AND p.source='g2b_bid' AND p.project_group_id IS NULL
+      AND g.id=$2 AND g.group_key=$3
+    RETURNING p.id,p.project_group_id`,[noticeId,groupId,identity.key]);
+  if(!updated.rowCount)return res.status(409).json({error:'그룹 식별키 불일치 또는 다른 관리자가 먼저 변경했습니다. 다시 조회하세요.'});
+  console.info('Project group approved', {noticeId,groupId,adminId:req.user?.id});
+  res.json({ok:true,notice_id:noticeId,group_id:groupId});
+ }catch(e){res.status(500).json({error:e.message});}
+});
+
+// Store only attributable, manually reviewed public organization details.
+app.post('/api/admin/project-groups/:id/contacts',loadUser,requireAdminRole,async(req,res)=>{
+ try{
+  const groupId=Number(req.params.id);
+  if(!Number.isSafeInteger(groupId)||groupId<=0)return res.status(400).json({error:'잘못된 프로젝트 ID'});
+  const role=String(req.body?.role||'').trim();
+  const organization=String(req.body?.organization||'').trim().slice(0,200);
+  const department=String(req.body?.department||'').trim().slice(0,120)||null;
+  const personName=String(req.body?.person_name||'').trim().slice(0,100)||null;
+  const phone=String(req.body?.phone||'').trim().slice(0,80)||null;
+  const email=String(req.body?.email||'').trim().slice(0,200)||null;
+  const sourceUrl=String(req.body?.source_url||'').trim().slice(0,1000);
+  if(!['client','designer','supervisor','contractor'].includes(role)||!organization)
+    return res.status(400).json({error:'참여기관 유형과 기관명은 필수입니다.'});
+  let url;
+  try{url=new URL(sourceUrl);}catch{return res.status(400).json({error:'근거가 되는 공개자료 URL을 입력하세요.'});}
+  if(!['http:','https:'].includes(url.protocol)||!url.hostname.includes('.'))
+    return res.status(400).json({error:'HTTP(S) 공개자료 URL만 허용됩니다.'});
+  if(email&&!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
+    return res.status(400).json({error:'이메일 형식을 확인하세요.'});
+  const g=await query('SELECT id FROM project_groups WHERE id=$1',[groupId]);
+  if(!g.rowCount)return res.status(404).json({error:'프로젝트를 찾을 수 없습니다.'});
+  const result=await query(`INSERT INTO project_group_contacts
+    (group_id,role,organization,department,person_name,phone,email,source,source_url)
+    VALUES($1,$2,$3,$4,$5,$6,$7,'manual_public',$8)
+    ON CONFLICT(group_id,role,organization,source) DO UPDATE SET
+      department=EXCLUDED.department,person_name=EXCLUDED.person_name,
+      phone=EXCLUDED.phone,email=EXCLUDED.email,source_url=EXCLUDED.source_url,
+      verified_at=NULL,updated_at=NOW()
+    RETURNING id,group_id,role,organization,source,source_url,verified_at`,
+    [groupId,role,organization,department,personName,phone,email,url.href]);
+  res.status(201).json({ok:true,contact:result.rows[0],note:'출처 URL이 등록되었습니다. 실제 내용의 검증 완료를 의미하지 않습니다.'});
+ }catch(e){res.status(500).json({error:e.message});}
+});
+
+app.post('/api/admin/project-groups/backfill',loadUser,requireAdminRole,async(req,res)=>{
+ try{
+  const limit=Math.min(500,Math.max(1,parseInt(req.body?.limit,10)||200));
+  const cursor=Math.max(0,parseInt(req.body?.cursor,10)||0);
+  const r=await query(`SELECT id,source,name,owner,address,region FROM projects
+    WHERE source='g2b_bid' AND id>$1 ORDER BY id LIMIT $2`,[cursor,limit]);
+  let linked=0,unmatched=0,errors=0;
+  for(const p of r.rows){try{if(await linkProjectGroup(p))linked++;else unmatched++;}catch(e){errors++;console.warn('Group backfill:',p.id,e.message);}}
+  res.json({processed:r.rows.length,linked,unmatched,errors,nextCursor:r.rows.length?r.rows[r.rows.length-1].id:cursor,done:r.rows.length<limit});
+ }catch(e){res.status(500).json({error:e.message});}
+});
+
+app.get("/api/projects/:id", async (req, res) => {
+  try {
+    const r = await query("SELECT * FROM projects WHERE id=$1", [req.params.id]);
+    if (!r.rowCount) return res.status(404).json({ error: "현장을 찾을 수 없습니다." });
+    const f = await query("SELECT id FROM favorites WHERE project_id=$1 AND user_key=$2", [req.params.id, String(req.user.id)]);
+    const s = await query("SELECT status,note FROM sales_pipeline WHERE project_id=$1 AND user_key=$2", [req.params.id, String(req.user.id)]);
+    const contacts = await query(`SELECT role,organization,department,person_name,phone,email,source,source_url,verified_at,updated_at
+      FROM project_contacts WHERE project_id=$1 ORDER BY CASE role WHEN 'client' THEN 1 WHEN 'designer' THEN 2 WHEN 'supervisor' THEN 3 ELSE 4 END, updated_at DESC`,[req.params.id]);
+    res.json({ ...r.rows[0], contacts: contacts.rows, favorite: !!f.rowCount, pipeline: s.rows[0] || { status: "NEW", note: "" } });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post("/api/projects/:id/favorite", async (req, res) => {
+  try {
+    const exists = await query("SELECT id FROM favorites WHERE project_id=$1 AND user_key=$2", [req.params.id, String(req.user.id)]);
+    if (exists.rowCount) await query("DELETE FROM favorites WHERE project_id=$1 AND user_key=$2", [req.params.id, String(req.user.id)]);
+    else await query("INSERT INTO favorites(project_id,user_key) VALUES($1,$2) ON CONFLICT DO NOTHING", [req.params.id, String(req.user.id)]);
+    res.json({ favorite: !exists.rowCount });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.put("/api/projects/:id/pipeline", async (req, res) => {
+  try {
+    const status = String(req.body.status || "NEW").slice(0, 30);
+    const note = String(req.body.note || "").slice(0, 2000);
+    await query(`INSERT INTO sales_pipeline(project_id,user_key,status,note) VALUES($1,$2,$3,$4)
+      ON CONFLICT(project_id,user_key) DO UPDATE SET status=EXCLUDED.status,note=EXCLUDED.note,updated_at=NOW()`, [req.params.id, String(req.user.id), status, note]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get("/api/recommendations", async (req, res) => {
+  try {
+    const key = profiles[req.query.profile] ? req.query.profile : "automation";
+    const rows = await query("SELECT * FROM projects ORDER BY updated_at DESC LIMIT 500");
+    const ranked = rows.rows.map(x => ({ ...x, score: scoreProject(x, key), profile: profiles[key].label }))
+      .sort((a,b) => b.score - a.score).slice(0, 100);
+    res.json({ profile: profiles[key].label, rows: ranked });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get("/api/favorites", async (req, res) => {
+  try {
+    const r = await query(`SELECT p.* FROM projects p JOIN favorites f ON f.project_id=p.id WHERE f.user_key=$1 ORDER BY f.created_at DESC`, [String(req.user.id)]);
+    res.json({ rows: r.rows });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get("/api/export.csv", async (req, res) => {
+  try {
+    const r = await query(`SELECT name AS "현장명",address AS "주소",region AS "시도",district AS "시군구",building_type AS "건물용도",stage AS "진행단계",permit_date AS "허가일",start_date AS "착공일",completion_date AS "사용승인일",owner AS "건축주/발주처",designer AS "설계사",supervisor AS "감리사",contractor AS "시공사",area_sqm AS "연면적" FROM projects ORDER BY updated_at DESC LIMIT 20000`);
+    const headers = Object.keys(r.rows[0] || { "현장명": "" });
+    const csv = [headers.join(","), ...r.rows.map(row => headers.map(h => `"${String(row[h] ?? "").replace(/"/g, '""')}"`).join(","))].join("\r\n");
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", "attachment; filename=build-signal-projects.csv");
+    res.send("\uFEFF" + csv);
+  } catch (e) { res.status(500).send(e.message); }
+});
+
+app.post("/api/ingest/projects", requireAdminRole, requireAdmin, async (req, res) => {
+  const source = String(req.body.source || "external").slice(0, 200);
+  const projects = Array.isArray(req.body.projects) ? req.body.projects.slice(0, 5000) : [];
+  let inserted = 0;
+  try {
+    for (const p of projects) {
+      if (!p.name) continue;
+      const values = [
+        source, p.externalId || null, p.name, p.address || null, p.region || null, p.district || null,
+        p.buildingType || null, STAGES.includes(p.stage) ? p.stage : "UNKNOWN",
+        normalizeDate(p.permitDate), normalizeDate(p.startDate), normalizeDate(p.completionDate),
+        p.floorsAbove || null, p.floorsBelow || null, p.areaSqm || null, p.estimatedCost || null,
+        p.owner || null, p.designer || null, p.supervisor || null, p.contractor || null,
+        p.sourceUrl || null, normalizeDate(p.sourceUpdatedAt)
+      ];
+      const result = await query(`INSERT INTO projects(source,external_id,name,address,region,district,building_type,stage,permit_date,start_date,completion_date,floors_above,floors_below,area_sqm,estimated_cost,owner,designer,supervisor,contractor,source_url,source_updated_at)
+        VALUES(${values.map((_,i)=>`$${i+1}`).join(",")})
+        ON CONFLICT(source,external_id) DO UPDATE SET name=EXCLUDED.name,address=EXCLUDED.address,region=EXCLUDED.region,district=EXCLUDED.district,building_type=EXCLUDED.building_type,stage=EXCLUDED.stage,permit_date=EXCLUDED.permit_date,start_date=EXCLUDED.start_date,completion_date=EXCLUDED.completion_date,owner=EXCLUDED.owner,designer=EXCLUDED.designer,supervisor=EXCLUDED.supervisor,source_url=EXCLUDED.source_url,source_updated_at=EXCLUDED.source_updated_at,updated_at=NOW()
+        RETURNING (xmax = 0) AS inserted`, values);
+      if (result.rows[0]?.inserted) inserted++;
+    }
+    await query("INSERT INTO ingest_logs(source,received_count,inserted_count,status,message) VALUES($1,$2,$3,'SUCCESS','Ingest completed')", [source, projects.length, inserted]);
+    res.json({ ok: true, received: projects.length, insertedOrUpdated: projects.length, inserted });
+  } catch (e) {
+    await query("INSERT INTO ingest_logs(source,received_count,inserted_count,status,message) VALUES($1,$2,$3,'ERROR',$4)", [source, projects.length, inserted, e.message]).catch(()=>{});
+    res.status(500).json({ error: e.message, insertedBeforeError: inserted });
+  }
+});
+
+app.get("/api/admin/ingest-logs", requireAdmin, async (req,res) => {
+  const r = await query("SELECT * FROM ingest_logs ORDER BY created_at DESC LIMIT 100");
+  res.json({ rows: r.rows });
+});
+
+app.post("/api/admin/demo-seed", requireAdmin, async (req,res) => {
+  const demo = [
+    ["DEMO-001","강남 업무시설 신축 프로젝트","서울특별시 강남구 테헤란로","서울특별시","강남구","업무시설","PERMIT","2026-10-12",null,null,22,5,28000,"가상 건축주 A","가상 설계사 B","가상 감리사 C",null],
+    ["DEMO-002","부산 해운대 호텔 신축 프로젝트","부산광역시 해운대구 해운대로","부산광역시","해운대구","숙박시설","STARTED","2026-06-03","2026-09-18",null,18,3,19000,"가상 시행사 D","가상 설계사 E","가상 감리사 F","가상 시공사 G"],
+    ["DEMO-003","인천 물류센터 증축 프로젝트","인천광역시 서구 산업로","인천광역시","서구","창고시설","BID","2026-10-29",null,null,4,1,14000,"가상 발주처 H",null,null,null],
+    ["DEMO-004","제주 리조트 신축 프로젝트","제주특별자치도 서귀포시 중문관광로","제주특별자치도","서귀포시","숙박시설","PERMIT","2026-10-20",null,null,12,2,16000,"가상 건축주 I","가상 설계사 J","가상 감리사 K",null],
+    ["DEMO-005","대전 연구시설 신축 프로젝트","대전광역시 유성구 대학로","대전광역시","유성구","교육연구시설","COMPLETED","2026-03-10","2026-05-01","2026-10-25",10,2,11000,"가상 기관 L","가상 설계사 M","가상 감리사 N","가상 시공사 O"]
+  ];
+  let n=0;
+  for (const d of demo) {
+    await query(`INSERT INTO projects(source,external_id,name,address,region,district,building_type,stage,permit_date,start_date,completion_date,floors_above,floors_below,area_sqm,owner,designer,supervisor,contractor)
+      VALUES('demo',$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+      ON CONFLICT(source,external_id) DO NOTHING`, d);
+    n++;
+  }
+  res.json({ ok:true, attempted:n, notice:"데모 데이터는 실제 현장정보가 아닙니다." });
+});
+
+app.get("/login", (req,res)=>res.sendFile(path.join(__dirname,"..","public","login.html")));
+async function start() {
+  await initDb();
+  if (process.env.ADMIN_EMAIL && process.env.ADMIN_PASSWORD) {
+    const email=String(process.env.ADMIN_EMAIL).trim().toLowerCase();
+    const hash=await bcrypt.hash(String(process.env.ADMIN_PASSWORD),12);
+    await query(`INSERT INTO users(email,password_hash,company_name,contact_name,role,status,approved_at)
+      VALUES($1,$2,'BUILD SIGNAL 운영팀','관리자','admin','approved',NOW())
+      ON CONFLICT(email) DO UPDATE SET password_hash=EXCLUDED.password_hash,role='admin',status='approved'`,[email,hash]);
+  }
+  const port = process.env.PORT || 10000;
+  app.listen(port, () => console.log(`BUILD SIGNAL listening on ${port}`));
+}
+start().catch(e => { console.error("Startup failed:", e); process.exit(1); });
+ THEN (job_data->>'updated')::int ELSE 0 END AS updated
+    FROM permit_ingest_jobs ORDER BY id DESC LIMIT 30`);
+  const quality=await query(`SELECT COUNT(*)::int AS total,
+    COUNT(*) FILTER (WHERE permit_date IS NULL)::int AS "missingPermitDate",
+    COUNT(*) FILTER (WHERE address IS NULL OR BTRIM(address)='')::int AS "missingAddress",
+    COUNT(*) FILTER (WHERE area_sqm IS NULL OR area_sqm<=0)::int AS "missingArea"
+    FROM projects WHERE source='arch_hub_permit'`);
+  res.json({history:history.rows,quality:quality.rows[0],
+   note:'수집 이력은 작업별 처리량이고 품질 집계는 현재 DB 전체의 스냅샷입니다. 특정 작업이 누락 데이터를 발생시켰다는 의미는 아닙니다.'});
+ }catch(e){res.status(500).json({error:'수집 이력 및 품질 조회 실패'});}
+});
+
 app.get('/api/admin/permits/history',loadUser,requireAdminRole,async(req,res)=>{try{const result=await query("SELECT id,status,job_data,created_at,updated_at FROM permit_ingest_jobs ORDER BY id DESC LIMIT 30");res.json({jobs:result.rows});}catch(e){res.status(500).json({error:e.message});}});
 app.get('/api/admin/permits/progress',loadUser,requireAdminRole,(req,res)=>res.json({job:permitJob}));
 
