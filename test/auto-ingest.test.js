@@ -19,7 +19,7 @@ function harness({denyLease=false,denyBudget=false,badPermit=false,regions=true,
   checks.push({sql,args});
   if(sql.includes('RETURNING *'))return {rows:denyLease?[]:[{cursor_at:'2026-11-11T12:00:00Z'}]};
   if(sql.includes('daily_calls=CASE'))return {rows:denyBudget?[]:[{source:args[0]}]};
-  if(sql.includes('SELECT * FROM auto_permit_regions'))return {rows:regions?[{...region}]:[]};
+  if(sql.includes('SELECT r.* FROM auto_permit_regions'))return {rows:regions?[{...region}]:[]};
   if(sql.includes('SET next_page=')){region.next_page=args[2];return {rows:[{sigungu_cd:'11680'}]};}
   if(sql.includes('SET cursor_at='))return {rows:[{source:'bids'}]};
   return {rows:[]};

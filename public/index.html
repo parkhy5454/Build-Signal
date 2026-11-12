@@ -18,7 +18,7 @@
 </aside>
 <main class="main">
 <header class="topbar"><div><span class="eyebrow">NATIONWIDE CONSTRUCTION LEADS</span><h1 id="pageTitle">대시보드</h1></div><div class="top-actions"><span class="pill">전국 데이터</span><a class="button light" href="/api/export.csv">엑셀 다운로드 ↓</a></div></header>
-<section class="panel" style="padding:16px;margin-bottom:16px" aria-live="polite"><strong>데이터 자동 갱신</strong><p id="autoFreshness">수집 상태 확인 중...</p></section>
+<section class="panel" style="padding:16px;margin-bottom:16px" aria-live="polite"><strong>데이터 자동 갱신</strong><p id="autoFreshness">수집 상태 확인 중...</p><details class="national-coverage"><summary>전국 지역별 수집 범위 확인</summary><div id="nationalCoverage">현황 확인 중...</div></details></section>
 <section id="dashboard" class="page active">
   <div class="hero"><div><span class="eyebrow light-text">BUILD SIGNAL INSIGHT</span><h2>공사가 시작되기 전에,<br>영업 기회를 먼저 발견하세요.</h2><p>전국 건설현장 데이터를 바탕으로 새로운 영업 기회를 찾습니다.</p><a class="button white" href="#projects" data-go="projects">현장 검색 시작 →</a></div><div class="hero-art">⌂<span>▥</span><i>✦</i></div></div>
   <div class="stats">
@@ -69,5 +69,5 @@
 <section id="favorites" class="page"><div class="section-head"><div><h3>관심 현장</h3><p>영업 후보로 저장한 현장</p></div></div><div id="favoriteResults" class="project-list"></div></section>
 </main>
 <div id="modal" class="modal hidden"><div class="modal-card"><button class="close" id="closeModal">×</button><div id="modalBody"></div></div></div>
-<script src="/app.js"></script>
+<script src="/app.js"></script><script src="/national-coverage.js"></script>
 </body></html>
