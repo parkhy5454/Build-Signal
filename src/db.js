@@ -120,6 +120,7 @@ async function initDb() {
       UNIQUE(project_id, user_key)
     );
     ALTER TABLE sales_pipeline ADD COLUMN IF NOT EXISTS next_contact_date DATE;
+    ALTER TABLE sales_pipeline ADD COLUMN IF NOT EXISTS priority TEXT NOT NULL DEFAULT 'NORMAL';
     CREATE TABLE IF NOT EXISTS sales_activities (
       id BIGSERIAL PRIMARY KEY,
       project_id BIGINT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
