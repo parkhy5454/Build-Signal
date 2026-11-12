@@ -4,7 +4,7 @@ const {provinces}=require('../src/region-catalog');
 test('every current official province is represented even when no records have been collected',()=>{
  const data=nationalCoverage();assert.deepEqual(data.rows.map(r=>r.code),provinces.filter(p=>p.code).map(p=>p.code));
  assert(data.rows.every(r=>r.permits.status==='key_missing'));assert.equal(data.initialScanMinimumDays,null);
- const seoul=data.rows.find(r=>r.label==='서울');assert.equal(seoul.developers.status,'unconnected');assert.equal(seoul.review.status,'unconnected');
+ const seoul=data.rows.find(r=>r.label==='서울');assert.equal(seoul.developers.status,'unconnected');assert.equal(seoul.review.status,'partial');
  assert.equal(data.nationalDeveloperSource.status,'connection_unverified');
 });
 test('a completed initial scan is distinct from current refresh and incomplete coverage is never marked current',()=>{
@@ -33,5 +33,5 @@ test('shared coverage view renders missing connections and partial review as sep
 test('national environment source success cannot turn unconnected architectural review into completed coverage',()=>{
  const data=nationalCoverage({environment:{last_success_at:'2026-11-13',last_error:null,total:14,unlocated:7}});
  assert.equal(data.environmentalReview.status,'checked');assert.equal(data.environmentalReview.total,14);assert.equal(data.environmentalReview.unlocated,7);
- assert.equal(data.rows.find(r=>r.code==='11').review.status,'unconnected');assert(data.environmentalReview.scope.includes('건축위원회 심의 전체를 대체하지 않습니다'));
+ assert.equal(data.rows.find(r=>r.code==='11').review.status,'partial');assert(data.environmentalReview.scope.includes('건축위원회 심의 전체를 대체하지 않습니다'));
 });

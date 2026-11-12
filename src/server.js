@@ -14,6 +14,7 @@ const { permitDate, permitLifecycle } = require("./archhub");
 const { createAutoIngest } = require("./auto-ingest");
 const {REGION_STATS_SQL,nationalCoverage}=require("./national-coverage");
 const {createEnvironmentCollector}=require("./environment-review");
+const {createSeoulCollector}=require("./seoul-review");
 const { meta:regionCatalogMeta,provinces,regionAliases,installRegionCatalog } = require("./region-catalog");
 
 const app = express();
@@ -987,6 +988,7 @@ app.get("/api/projects", async (req, res) => {
     const clause = where.length ? `WHERE ${where.join(" AND ")}` : "";
     const count = await query(`SELECT COUNT(*)::int AS n FROM projects p ${clause}`, params);
     const rows = await query(`SELECT p.*,
+      (SELECT decision_result FROM architectural_review_details ar WHERE ar.project_id=p.id) AS architectural_review_result,
       (SELECT organization FROM project_party_evidence pe WHERE pe.project_id=p.id AND pe.role='owner' ORDER BY observed_at DESC,id DESC LIMIT 1) AS owner_evidence,
       (SELECT organization FROM project_party_evidence pe WHERE pe.project_id=p.id AND pe.role='applicant' ORDER BY observed_at DESC,id DESC LIMIT 1) AS applicant_evidence,
       (SELECT organization FROM project_party_evidence pe WHERE pe.project_id=p.id AND pe.role='developer' ORDER BY observed_at DESC,id DESC LIMIT 1) AS developer_evidence,
@@ -1196,7 +1198,7 @@ app.post('/api/admin/party-contact-decisions',loadUser,requireAdminRole,async(re
 });
 app.get('/api/admin/early-projects',loadUser,requireAdminRole,async(req,res)=>{
  try{
-  const projects=await query(`SELECT p.id,p.name,p.address,p.source,p.source_updated_at,l.permit_id FROM projects p LEFT JOIN project_phase_links l ON l.early_id=p.id WHERE p.source IN ('public_review','environment_review') ORDER BY p.updated_at DESC LIMIT 50`);
+  const projects=await query(`SELECT p.id,p.name,p.address,p.source,p.source_updated_at,l.permit_id FROM projects p LEFT JOIN project_phase_links l ON l.early_id=p.id WHERE p.source IN ('public_review','environment_review','seoul_review') ORDER BY p.updated_at DESC LIMIT 50`);
   const documents=await query('SELECT * FROM early_source_documents ORDER BY last_checked_at DESC NULLS LAST LIMIT 20');
   res.json({projects:projects.rows,documents:documents.rows});
  }catch{res.status(500).json({error:'초기 사업 수집 현황 조회 실패'});}
@@ -1214,7 +1216,7 @@ app.post('/api/admin/early-projects/link',loadUser,requireAdminRole,async(req,re
   const early=Number(req.body?.early_id),permit=Number(req.body?.permit_id),reason=String(req.body?.reason||'').trim();
   if(!Number.isSafeInteger(early)||!Number.isSafeInteger(permit)||early<1||permit<1||early===permit||reason.length<10||reason.length>1000)return res.status(400).json({error:'심의/인허가 현장 ID와 같은 사업으로 판단한 근거(10~1000자)가 필요합니다.'});
   const linked=await query(`INSERT INTO project_phase_links(early_id,permit_id,reason,reviewed_by)
-   SELECT a.id,b.id,$3,$4 FROM projects a,projects b WHERE a.id=$1 AND (a.source='public_review' OR a.source='environment_review') AND b.id=$2 AND b.source='arch_hub_permit'
+   SELECT a.id,b.id,$3,$4 FROM projects a,projects b WHERE a.id=$1 AND (a.source='public_review' OR a.source='environment_review' OR a.source='seoul_review') AND b.id=$2 AND b.source='arch_hub_permit'
    ON CONFLICT(early_id) DO NOTHING RETURNING early_id`,[early,permit,reason,req.user.id]);
   if(!linked.rowCount)return res.status(409).json({error:'출처 유형이 다르거나 이미 연결되었습니다. 원문과 기존 연결을 확인하세요.'});
   res.json({ok:true});
@@ -1235,8 +1237,9 @@ app.get("/api/projects/:id", async (req, res) => {
     const evidence=await query('SELECT * FROM project_party_evidence WHERE project_id=ANY($1::bigint[]) ORDER BY observed_at DESC,id DESC LIMIT 100',[ids]);
     const phases=await query('SELECT id,name,stage,permit_date,start_date,completion_date,source_updated_at,source_url FROM projects WHERE id=ANY($1::bigint[]) ORDER BY source_updated_at NULLS LAST,id',[ids]);
     const directory=await directoryMatches(query,evidence.rows);
+    const architecture=await query('SELECT a.*,p.source_updated_at AS review_date FROM architectural_review_details a JOIN projects p ON p.id=a.project_id WHERE a.project_id=ANY($1::bigint[])',[ids]);
     const environmental=await query('SELECT e.*,p.source_updated_at AS notice_date FROM environment_review_details e JOIN projects p ON p.id=e.project_id WHERE e.project_id=ANY($1::bigint[])',[ids]);
-    res.json({ ...r.rows[0], contacts: contacts.rows,partyEvidence:evidence.rows,companyDirectory:directory,environmentalReviews:environmental.rows,directoryCoverage:coverageSummary((await query('SELECT source,last_success_at,last_error,record_count FROM directory_sync_state')).rows),phaseProjects:phases.rows,masterProjectId:masterId,favorite: !!f.rowCount, pipeline: s.rows[0] || { status: "NEW", note: "" } });
+    res.json({ ...r.rows[0], contacts: contacts.rows,partyEvidence:evidence.rows,companyDirectory:directory,environmentalReviews:environmental.rows,architecturalReviews:architecture.rows,directoryCoverage:coverageSummary((await query('SELECT source,last_success_at,last_error,record_count FROM directory_sync_state')).rows),phaseProjects:phases.rows,masterProjectId:masterId,favorite: !!f.rowCount, pipeline: s.rows[0] || { status: "NEW", note: "" } });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -1843,6 +1846,7 @@ app.get("/login", (req,res)=>res.sendFile(path.join(__dirname,"..","public","log
 const earlyCollector=createEarlyCollector({query,transaction});
 const directorySync=createDirectorySync({query,transaction});
 const environmentCollector=createEnvironmentCollector({query,transaction});
+const seoulCollector=createSeoulCollector({query,transaction});
 const automaticIngest=createAutoIngest({query,
  busy:source=>source==='bids'?g2bJob?.status==='running':permitJob?.status==='running',
  permit:async opts=>{
@@ -1880,7 +1884,7 @@ app.get('/api/ingestion/freshness',async(req,res)=>{
    COUNT(*) FILTER (WHERE enabled AND last_cycle_at IS NOT NULL)::int AS completed_regions,
    MIN(last_cycle_at) FILTER (WHERE enabled) AS oldest_cycle,
    COUNT(*) FILTER (WHERE enabled AND last_error IS NOT NULL)::int AS failed_regions FROM auto_permit_regions`);
-  res.json({enabled:automaticIngest.enabled(),configured:{permits:!!process.env.ARCH_HUB_SERVICE_KEY,bids:!!process.env.G2B_SERVICE_KEY,early:true,environment_review:true},sources:states.rows,coverage:coverage.rows[0],catalogDate:regionCatalogMeta.retrievedOn,
+  res.json({enabled:automaticIngest.enabled(),configured:{permits:!!process.env.ARCH_HUB_SERVICE_KEY,bids:!!process.env.G2B_SERVICE_KEY,early:true,environment_review:true,seoul_review:true},sources:states.rows,coverage:coverage.rows[0],catalogDate:regionCatalogMeta.retrievedOn,
    note:'국토부는 내장된 전국 공식 지역코드로 순회 적재합니다. 지역 선택은 저장된 자료를 필터링하며, 지역별 수집 완료를 의미하지 않습니다. 처리량과 원천 반영 주기에 따라 지연될 수 있습니다.'});
  }catch{res.status(500).json({error:'자동 수집 현황 조회 실패'});}
 });
@@ -1895,6 +1899,6 @@ async function start() {
       ON CONFLICT(email) DO UPDATE SET password_hash=EXCLUDED.password_hash,role='admin',status='approved'`,[email,hash]);
   }
   const port = process.env.PORT || 10000;
-  app.listen(port, () => {console.log(`BUILD SIGNAL listening on ${port}`);automaticIngest.start();earlyCollector.start();directorySync.start();environmentCollector.start();});
+  app.listen(port, () => {console.log(`BUILD SIGNAL listening on ${port}`);automaticIngest.start();earlyCollector.start();directorySync.start();environmentCollector.start();seoulCollector.start();});
 }
 start().catch(e => { console.error("Startup failed:", e); process.exit(1); });

@@ -38,7 +38,7 @@ async function initDb() {
       last_attempt_at TIMESTAMPTZ,last_success_at TIMESTAMPTZ,last_error TEXT,
       lease_token TEXT,lease_until TIMESTAMPTZ,call_day DATE,daily_calls INTEGER NOT NULL DEFAULT 0
     );
-    INSERT INTO auto_ingest_state(source) VALUES('permits'),('bids'),('early'),('environment_review') ON CONFLICT DO NOTHING;
+    INSERT INTO auto_ingest_state(source) VALUES('permits'),('bids'),('early'),('environment_review'),('seoul_review') ON CONFLICT DO NOTHING;
     CREATE TABLE IF NOT EXISTS auto_permit_regions (
       sigungu_cd CHAR(5) NOT NULL,bjdong_cd CHAR(5) NOT NULL,label TEXT NOT NULL DEFAULT '',
       enabled BOOLEAN NOT NULL DEFAULT TRUE,next_page INTEGER NOT NULL DEFAULT 1 CHECK(next_page>0),
@@ -128,6 +128,16 @@ async function initDb() {
       result_code TEXT NOT NULL,kind TEXT NOT NULL CHECK(kind IN ('environment','strategic')),
       public_period TEXT,approving_authority TEXT,consulting_authority TEXT
     );
+    CREATE TABLE IF NOT EXISTS architectural_review_details (
+      project_id BIGINT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,committee_name TEXT NOT NULL,
+      decision_no TEXT NOT NULL,decision_result TEXT NOT NULL,post_url TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS seoul_review_files (
+      url TEXT PRIMARY KEY,post_id BIGINT NOT NULL,file_no INTEGER NOT NULL,original_name TEXT NOT NULL,post_url TEXT NOT NULL,revision TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',next_due_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),last_processed_at TIMESTAMPTZ,last_error TEXT
+    );
+    CREATE TABLE IF NOT EXISTS seoul_review_state(id INTEGER PRIMARY KEY,next_discovery_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
+    INSERT INTO seoul_review_state(id) VALUES(1) ON CONFLICT DO NOTHING;
     CREATE TABLE IF NOT EXISTS project_party_evidence (
       id BIGSERIAL PRIMARY KEY,project_id BIGINT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
       role TEXT NOT NULL CHECK(role IN ('owner','developer','applicant','designer','contractor','supervisor','operator')),

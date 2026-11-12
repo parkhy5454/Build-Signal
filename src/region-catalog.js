@@ -17,6 +17,7 @@ for(const [code,name] of catalog.rows){
  }
 }
 const municipalityNames=[...municipalityProvinces.keys()].sort((a,b)=>b.length-a.length);
+function municipalitiesForProvince(code){const p=provinces.find(x=>x.code===code);return p?[...municipalityProvinces].filter(([,v])=>v.has(p.value)).map(([k])=>k):[];}
 function locationRegion(value){
  const text=String(value||'').trim().replace(/\s+/g,' ');
  const key=municipalityNames.find(name=>text.startsWith(name+' '));
@@ -36,4 +37,4 @@ async function installRegionCatalog(query){
  await query("UPDATE permit_legal_dong_codes SET active=FALSE,updated_at=NOW() WHERE catalog_origin='official_bundle' AND NOT (code=ANY($1::text[]))",[catalog.rows.map(x=>x[0])]);
  await query(`INSERT INTO region_catalog_state(id,version,loaded_at) VALUES(1,$1,NOW()) ON CONFLICT(id) DO UPDATE SET version=EXCLUDED.version,loaded_at=NOW()`,[meta.sha256]);
 }
-module.exports={meta,provinces,regionAliases,locationRegion,installRegionCatalog};
+module.exports={meta,provinces,regionAliases,locationRegion,municipalitiesForProvince,installRegionCatalog};
