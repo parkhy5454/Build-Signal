@@ -170,7 +170,10 @@ app.post("/api/admin/g2b/sync", loadUser, requireAdminRole, async (req, res) => 
   if (!serviceKey) return res.status(400).json({ error: "Render 환경변수 G2B_SERVICE_KEY가 설정되지 않았습니다." });
   const days = Math.min(7, Math.max(1, Number(req.body.days) || 7));
   const end = new Date();
-  const start = new Date(end.getTime() - days * 24 * 60 * 60 * 1000);
+  // 나라장터의 7일 제한은 시작일과 종료일을 모두 포함해 계산될 수 있어
+  // 정확히 7*24시간 대신 경계 여유를 둔 6일 23시간 59분으로 조회합니다.
+  const safeWindowMs = Math.min(days * 24 * 60 * 60 * 1000, 7 * 24 * 60 * 60 * 1000 - 60 * 1000);
+  const start = new Date(end.getTime() - safeWindowMs);
   const fmt = d => d.getFullYear() + String(d.getMonth()+1).padStart(2,"0") + String(d.getDate()).padStart(2,"0") + String(d.getHours()).padStart(2,"0") + String(d.getMinutes()).padStart(2,"0");
   const params = new URLSearchParams({
     serviceKey,
