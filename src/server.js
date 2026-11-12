@@ -13,6 +13,7 @@ const { profiles, scoreProject } = require("./scoring");
 const { permitDate, permitLifecycle } = require("./archhub");
 const { createAutoIngest } = require("./auto-ingest");
 const {REGION_STATS_SQL,nationalCoverage}=require("./national-coverage");
+const {createEnvironmentCollector}=require("./environment-review");
 const { meta:regionCatalogMeta,provinces,regionAliases,installRegionCatalog } = require("./region-catalog");
 
 const app = express();
@@ -30,7 +31,7 @@ app.use(session({
 app.use(express.static(path.join(__dirname, "..", "public")));
 
 const STAGES = ["REVIEW", "PERMIT", "STARTED", "COMPLETED", "BID", "UNKNOWN"];
-const stageNames = { REVIEW:"심의", PERMIT: "인허가", STARTED: "착공", COMPLETED: "준공", BID: "입찰", UNKNOWN: "확인 필요" };
+const stageNames = { REVIEW:"심의·환경평가", PERMIT: "인허가", STARTED: "착공", COMPLETED: "준공", BID: "입찰", UNKNOWN: "확인 필요" };
 
 function requireAdmin(req, res, next) {
   const token = req.headers["x-ingest-token"];
@@ -966,7 +967,7 @@ app.get("/api/projects", async (req, res) => {
     const params = [], where = [];
     function add(v, sql) { where.push(sql.replace(/\?/g, () => { params.push(v); return `$${params.length}`; })); }
     const rawKeyword = String(q).trim().slice(0,120);
-    const keywordStage = ({심의:"REVIEW",인허가:"PERMIT",허가:"PERMIT",착공:"STARTED",준공:"COMPLETED",사용승인:"COMPLETED",입찰:"BID"})[rawKeyword];
+    const keywordStage = ({심의:"REVIEW",환경평가:"REVIEW",환경영향평가:"REVIEW",공람:"REVIEW",인허가:"PERMIT",허가:"PERMIT",착공:"STARTED",준공:"COMPLETED",사용승인:"COMPLETED",입찰:"BID"})[rawKeyword];
     const selectedStage = String(stage || keywordStage || "");
     if(selectedStage && !STAGES.includes(selectedStage))return res.status(400).json({error:"잘못된 진행 단계입니다."});
     const keyword = keywordStage ? "" : rawKeyword;
@@ -988,6 +989,7 @@ app.get("/api/projects", async (req, res) => {
     const rows = await query(`SELECT p.*,
       (SELECT organization FROM project_party_evidence pe WHERE pe.project_id=p.id AND pe.role='owner' ORDER BY observed_at DESC,id DESC LIMIT 1) AS owner_evidence,
       (SELECT organization FROM project_party_evidence pe WHERE pe.project_id=p.id AND pe.role='applicant' ORDER BY observed_at DESC,id DESC LIMIT 1) AS applicant_evidence,
+      (SELECT organization FROM project_party_evidence pe WHERE pe.project_id=p.id AND pe.role='developer' ORDER BY observed_at DESC,id DESC LIMIT 1) AS developer_evidence,
       (SELECT COUNT(*)::int FROM project_party_evidence pe WHERE pe.project_id=p.id) AS party_count,
       (SELECT COUNT(*)::int FROM project_contacts pc WHERE pc.project_id=p.id) AS contact_count,
       EXISTS(SELECT 1 FROM project_contacts pc WHERE pc.project_id=p.id AND pc.phone IS NOT NULL AND pc.phone<>'') AS has_phone,
@@ -1194,7 +1196,7 @@ app.post('/api/admin/party-contact-decisions',loadUser,requireAdminRole,async(re
 });
 app.get('/api/admin/early-projects',loadUser,requireAdminRole,async(req,res)=>{
  try{
-  const projects=await query(`SELECT p.id,p.name,p.address,p.source_updated_at,l.permit_id FROM projects p LEFT JOIN project_phase_links l ON l.early_id=p.id WHERE p.source='public_review' ORDER BY p.updated_at DESC LIMIT 50`);
+  const projects=await query(`SELECT p.id,p.name,p.address,p.source,p.source_updated_at,l.permit_id FROM projects p LEFT JOIN project_phase_links l ON l.early_id=p.id WHERE p.source IN ('public_review','environment_review') ORDER BY p.updated_at DESC LIMIT 50`);
   const documents=await query('SELECT * FROM early_source_documents ORDER BY last_checked_at DESC NULLS LAST LIMIT 20');
   res.json({projects:projects.rows,documents:documents.rows});
  }catch{res.status(500).json({error:'초기 사업 수집 현황 조회 실패'});}
@@ -1212,7 +1214,7 @@ app.post('/api/admin/early-projects/link',loadUser,requireAdminRole,async(req,re
   const early=Number(req.body?.early_id),permit=Number(req.body?.permit_id),reason=String(req.body?.reason||'').trim();
   if(!Number.isSafeInteger(early)||!Number.isSafeInteger(permit)||early<1||permit<1||early===permit||reason.length<10||reason.length>1000)return res.status(400).json({error:'심의/인허가 현장 ID와 같은 사업으로 판단한 근거(10~1000자)가 필요합니다.'});
   const linked=await query(`INSERT INTO project_phase_links(early_id,permit_id,reason,reviewed_by)
-   SELECT a.id,b.id,$3,$4 FROM projects a,projects b WHERE a.id=$1 AND a.source='public_review' AND b.id=$2 AND b.source='arch_hub_permit'
+   SELECT a.id,b.id,$3,$4 FROM projects a,projects b WHERE a.id=$1 AND (a.source='public_review' OR a.source='environment_review') AND b.id=$2 AND b.source='arch_hub_permit'
    ON CONFLICT(early_id) DO NOTHING RETURNING early_id`,[early,permit,reason,req.user.id]);
   if(!linked.rowCount)return res.status(409).json({error:'출처 유형이 다르거나 이미 연결되었습니다. 원문과 기존 연결을 확인하세요.'});
   res.json({ok:true});
@@ -1233,7 +1235,8 @@ app.get("/api/projects/:id", async (req, res) => {
     const evidence=await query('SELECT * FROM project_party_evidence WHERE project_id=ANY($1::bigint[]) ORDER BY observed_at DESC,id DESC LIMIT 100',[ids]);
     const phases=await query('SELECT id,name,stage,permit_date,start_date,completion_date,source_updated_at,source_url FROM projects WHERE id=ANY($1::bigint[]) ORDER BY source_updated_at NULLS LAST,id',[ids]);
     const directory=await directoryMatches(query,evidence.rows);
-    res.json({ ...r.rows[0], contacts: contacts.rows,partyEvidence:evidence.rows,companyDirectory:directory,directoryCoverage:coverageSummary((await query('SELECT source,last_success_at,last_error,record_count FROM directory_sync_state')).rows),phaseProjects:phases.rows,masterProjectId:masterId,favorite: !!f.rowCount, pipeline: s.rows[0] || { status: "NEW", note: "" } });
+    const environmental=await query('SELECT e.*,p.source_updated_at AS notice_date FROM environment_review_details e JOIN projects p ON p.id=e.project_id WHERE e.project_id=ANY($1::bigint[])',[ids]);
+    res.json({ ...r.rows[0], contacts: contacts.rows,partyEvidence:evidence.rows,companyDirectory:directory,environmentalReviews:environmental.rows,directoryCoverage:coverageSummary((await query('SELECT source,last_success_at,last_error,record_count FROM directory_sync_state')).rows),phaseProjects:phases.rows,masterProjectId:masterId,favorite: !!f.rowCount, pipeline: s.rows[0] || { status: "NEW", note: "" } });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -1839,6 +1842,7 @@ app.post("/api/admin/demo-seed", requireAdmin, async (req,res) => {
 app.get("/login", (req,res)=>res.sendFile(path.join(__dirname,"..","public","login.html")));
 const earlyCollector=createEarlyCollector({query,transaction});
 const directorySync=createDirectorySync({query,transaction});
+const environmentCollector=createEnvironmentCollector({query,transaction});
 const automaticIngest=createAutoIngest({query,
  busy:source=>source==='bids'?g2bJob?.status==='running':permitJob?.status==='running',
  permit:async opts=>{
@@ -1857,10 +1861,11 @@ app.get('/api/ingestion/coverage',async(req,res)=>{
  try{
   if(!nationalCoverageCache||nationalCoverageCache.expiresAt<Date.now()){
    if(!nationalCoverageLoading)nationalCoverageLoading=(async()=>{
-    const [stats,directories]=await Promise.all([
-     query(REGION_STATS_SQL),query('SELECT source,last_success_at,last_error,record_count FROM directory_sync_state')
+    const [stats,directories,environment]=await Promise.all([
+     query(REGION_STATS_SQL),query('SELECT source,last_success_at,last_error,record_count FROM directory_sync_state'),
+     query("SELECT s.last_success_at,s.last_error,COUNT(p.id)::int AS total,COUNT(p.id) FILTER (WHERE p.region IS NULL)::int AS unlocated FROM auto_ingest_state s LEFT JOIN projects p ON p.source=s.source WHERE s.source='environment_review' GROUP BY s.source,s.last_success_at,s.last_error")
     ]);
-    const data=nationalCoverage({stats:stats.rows,directories:directories.rows,configured:!!process.env.ARCH_HUB_SERVICE_KEY,enabled:automaticIngest.enabled(),env:process.env});
+    const data=nationalCoverage({stats:stats.rows,directories:directories.rows,environment:environment.rows[0],configured:!!process.env.ARCH_HUB_SERVICE_KEY,enabled:automaticIngest.enabled(),env:process.env});
     nationalCoverageCache={data,expiresAt:Date.now()+60000};
    })().finally(()=>{nationalCoverageLoading=null;});
    await nationalCoverageLoading;
@@ -1875,7 +1880,7 @@ app.get('/api/ingestion/freshness',async(req,res)=>{
    COUNT(*) FILTER (WHERE enabled AND last_cycle_at IS NOT NULL)::int AS completed_regions,
    MIN(last_cycle_at) FILTER (WHERE enabled) AS oldest_cycle,
    COUNT(*) FILTER (WHERE enabled AND last_error IS NOT NULL)::int AS failed_regions FROM auto_permit_regions`);
-  res.json({enabled:automaticIngest.enabled(),configured:{permits:!!process.env.ARCH_HUB_SERVICE_KEY,bids:!!process.env.G2B_SERVICE_KEY,early:true},sources:states.rows,coverage:coverage.rows[0],catalogDate:regionCatalogMeta.retrievedOn,
+  res.json({enabled:automaticIngest.enabled(),configured:{permits:!!process.env.ARCH_HUB_SERVICE_KEY,bids:!!process.env.G2B_SERVICE_KEY,early:true,environment_review:true},sources:states.rows,coverage:coverage.rows[0],catalogDate:regionCatalogMeta.retrievedOn,
    note:'국토부는 내장된 전국 공식 지역코드로 순회 적재합니다. 지역 선택은 저장된 자료를 필터링하며, 지역별 수집 완료를 의미하지 않습니다. 처리량과 원천 반영 주기에 따라 지연될 수 있습니다.'});
  }catch{res.status(500).json({error:'자동 수집 현황 조회 실패'});}
 });
@@ -1890,6 +1895,6 @@ async function start() {
       ON CONFLICT(email) DO UPDATE SET password_hash=EXCLUDED.password_hash,role='admin',status='approved'`,[email,hash]);
   }
   const port = process.env.PORT || 10000;
-  app.listen(port, () => {console.log(`BUILD SIGNAL listening on ${port}`);automaticIngest.start();earlyCollector.start();directorySync.start();});
+  app.listen(port, () => {console.log(`BUILD SIGNAL listening on ${port}`);automaticIngest.start();earlyCollector.start();directorySync.start();environmentCollector.start();});
 }
 start().catch(e => { console.error("Startup failed:", e); process.exit(1); });

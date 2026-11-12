@@ -7,6 +7,21 @@ const legacy=[['서울특별시','서울'],['부산광역시','부산'],['대구
 const historic={'강원특별자치도':['강원도'],'전북특별자치도':['전라북도'],'전남광주통합특별시':['전라남도','광주광역시']};
 const provinces=catalog.rows.filter(([code])=>code.endsWith('00000000')).map(([code,name])=>({code:code.slice(0,2),value:name,label:legacy.find(x=>x[0]===name)?.[1]||name,aliases:[name,legacy.find(x=>x[0]===name)?.[1]||name,...(historic[name]||[])]}));
 for(const [name,label] of legacy)if(!provinces.some(x=>x.value===name))provinces.push({code:null,value:name,label:label+' (기존 자료)',aliases:[name,label,...(historic[name]||[])]});
+// Resolve only an explicitly written, uniquely named municipality from the verified national catalog.
+const municipalityProvinces=new Map();
+for(const [code,name] of catalog.rows){
+ if(!code.endsWith('00000')||code.endsWith('00000000'))continue;
+ const parts=name.split(' '),province=parts.shift();
+ for(const key of new Set([parts.join(' '),parts.at(-1)])){
+  if(!key)continue;if(!municipalityProvinces.has(key))municipalityProvinces.set(key,new Set());municipalityProvinces.get(key).add(province);
+ }
+}
+const municipalityNames=[...municipalityProvinces.keys()].sort((a,b)=>b.length-a.length);
+function locationRegion(value){
+ const text=String(value||'').trim().replace(/\s+/g,' ');
+ const key=municipalityNames.find(name=>text.startsWith(name+' '));
+ const matches=municipalityProvinces.get(key);return matches?.size===1?[...matches][0]:null;
+}
 function regionAliases(value){const text=String(value||'').trim();if(!text)return [];return provinces.find(x=>x.value===text||x.label===text||x.code===text||x.aliases.includes(text))?.aliases||[text];}
 async function installRegionCatalog(query){
  const old=await query("SELECT version FROM region_catalog_state WHERE id=1");
@@ -21,4 +36,4 @@ async function installRegionCatalog(query){
  await query("UPDATE permit_legal_dong_codes SET active=FALSE,updated_at=NOW() WHERE catalog_origin='official_bundle' AND NOT (code=ANY($1::text[]))",[catalog.rows.map(x=>x[0])]);
  await query(`INSERT INTO region_catalog_state(id,version,loaded_at) VALUES(1,$1,NOW()) ON CONFLICT(id) DO UPDATE SET version=EXCLUDED.version,loaded_at=NOW()`,[meta.sha256]);
 }
-module.exports={meta,provinces,regionAliases,installRegionCatalog};
+module.exports={meta,provinces,regionAliases,locationRegion,installRegionCatalog};

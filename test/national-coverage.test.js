@@ -30,3 +30,8 @@ test('shared coverage view renders missing connections and partial review as sep
  assert(out.innerHTML.includes('서울'));assert(out.innerHTML.includes('개발업체 회사 명부'));assert(out.innerHTML.includes('미연결'));assert(out.innerHTML.includes('군산 공개 PDF 1건'));
  assert(out.innerHTML.includes('응답·필드 검증 및 연결 대기'));assert(!out.innerHTML.includes('전국 수집 완료'));
 });
+test('national environment source success cannot turn unconnected architectural review into completed coverage',()=>{
+ const data=nationalCoverage({environment:{last_success_at:'2026-11-13',last_error:null,total:14,unlocated:7}});
+ assert.equal(data.environmentalReview.status,'checked');assert.equal(data.environmentalReview.total,14);assert.equal(data.environmentalReview.unlocated,7);
+ assert.equal(data.rows.find(r=>r.code==='11').review.status,'unconnected');assert(data.environmentalReview.scope.includes('건축위원회 심의 전체를 대체하지 않습니다'));
+});
