@@ -1,0 +1,29 @@
+name: Syntax validation
+on:
+  push:
+    branches:
+      - 'feature/group-link-monitoring'
+  pull_request:
+jobs:
+  syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Check server JavaScript
+        run: node --check src/server.js
+      - name: Check client JavaScript
+        run: node --check public/app.js
+      - name: Check admin inline script
+        run: |
+          node - <<'NODE'
+          const fs = require('fs');
+          const vm = require('vm');
+          const html = fs.readFileSync('public/admin.html', 'utf8');
+          const scripts = [...html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/gi)];
+          if (!scripts.length) throw new Error('No inline admin script found');
+          for (const [, source] of scripts) new vm.Script(source, {filename:'admin-inline.js'});
+          console.log('Admin inline scripts parsed:', scripts.length);
+          NODE
