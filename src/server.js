@@ -463,7 +463,8 @@ app.get('/api/admin/permits/legal-dong',loadUser,requireAdminRole,async(req,res)
  const term=String(req.query.q||'').trim();
  if(term.length<2)return res.json({regions:[]});
  try{
-  const r=await query("SELECT code,name FROM permit_legal_dong_codes WHERE active=TRUE AND (name ILIKE $1 OR code LIKE $2) ORDER BY name LIMIT 50",['%'+term.replace(/[\\%_]/g,'\\app.get('/api/admin/permits/regions',loadUser,requireAdminRole')+'%',term+'%']);
+  const pattern='%'+term.replace(/[\\%_]/g,'\\$&')+'%';
+  const r=await query("SELECT code,name FROM permit_legal_dong_codes WHERE active=TRUE AND (name ILIKE $1 OR code LIKE $2) ORDER BY name LIMIT 50",[pattern,term+'%']);
   res.json({regions:r.rows.map(x=>({name:x.name,code:x.code,sigunguCd:x.code.slice(0,5),bjdongCd:x.code.slice(5,10)}))});
  }catch(e){res.status(500).json({error:'법정동 검색 실패'});}
 });
