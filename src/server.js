@@ -392,6 +392,16 @@ app.post('/api/admin/permits/test',loadUser,requireAdminRole,async(req,res)=>{
 
 
 let permitJob=null;
+async function savePermitJob(job){
+ try{
+  if(!job.dbId){
+   const result=await query("INSERT INTO permit_ingest_jobs(status,job_data) VALUES($1,$2::jsonb) RETURNING id",[job.status,JSON.stringify(job)]);
+   job.dbId=String(result.rows[0].id);
+  }
+  await query("UPDATE permit_ingest_jobs SET status=$1,job_data=$2::jsonb,updated_at=NOW() WHERE id=$3",[job.status,JSON.stringify(job),job.dbId]);
+ }catch(e){console.error('Permit job log:',e.message);}
+}
+
 const permitDate=v=>{const x=String(v||'');if(!/^\d{8}$/.test(x))return null;const iso=`${x.slice(0,4)}-${x.slice(4,6)}-${x.slice(6,8)}`;const d=new Date(iso+'T00:00:00Z');return Number.isFinite(d.getTime())&&d.toISOString().slice(0,10)===iso?iso:null;};
 async function permitSync(job,opts){
  try{
@@ -432,7 +442,7 @@ async function permitSync(job,opts){
   }
   job.status='completed';
  }catch(e){job.status='failed';job.error=String(e.message).slice(0,200);}
- finally{job.finishedAt=new Date().toISOString();}
+ finally{job.finishedAt=new Date().toISOString();await savePermitJob(job);}
 }
 app.post('/api/admin/permits/sync',loadUser,requireAdminRole,(req,res)=>{
  if(!process.env.ARCH_HUB_SERVICE_KEY)return res.status(400).json({error:'ARCH_HUB_SERVICE_KEY 미설정'});
@@ -444,9 +454,10 @@ app.post('/api/admin/permits/sync',loadUser,requireAdminRole,(req,res)=>{
  const to=Date.parse(endDate.slice(0,4)+'-'+endDate.slice(4,6)+'-'+endDate.slice(6,8));
  if(!permitDate(startDate)||!permitDate(endDate)||!Number.isFinite(from)||!Number.isFinite(to)||to-from>29*86400000)return res.status(400).json({error:'한 번에 최대 30일까지만 수집할 수 있습니다.'});
  permitJob={status:'running',received:0,inserted:0,updated:0,skipped:0,pages:0,total:0,startedAt:new Date().toISOString()};
- void permitSync(permitJob,{sigunguCd,bjdongCd,startDate,endDate});
+ void (async()=>{await savePermitJob(permitJob);await permitSync(permitJob,{sigunguCd,bjdongCd,startDate,endDate});})();
  res.status(202).json({job:permitJob});
 });
+app.get('/api/admin/permits/history',loadUser,requireAdminRole,async(req,res)=>{try{const result=await query("SELECT id,status,job_data,created_at,updated_at FROM permit_ingest_jobs ORDER BY id DESC LIMIT 30");res.json({jobs:result.rows});}catch(e){res.status(500).json({error:e.message});}});
 app.get('/api/admin/permits/progress',loadUser,requireAdminRole,(req,res)=>res.json({job:permitJob}));
 
 app.post('/api/admin/permits/retry',loadUser,requireAdminRole,(req,res)=>{
@@ -458,16 +469,17 @@ app.post('/api/admin/permits/retry',loadUser,requireAdminRole,(req,res)=>{
  const retry=failed.map(w=>({...w}));
  permitJob={status:'running',received:0,inserted:0,updated:0,skipped:0,pages:0,completedWindows:0,totalWindows:retry.length,errors:[],failedWindows:[],startedAt:new Date().toISOString(),retry:true};
  const job=permitJob;
- void (async()=>{
+ void (async()=>{await savePermitJob(job);
   for(const opts of retry){
    const child={status:'running',received:0,inserted:0,updated:0,skipped:0,pages:0,total:0};
    await permitSync(child,opts);
    for(const k of ['received','inserted','updated','skipped','pages'])job[k]+=child[k];
    job.completedWindows++;
+   await savePermitJob(job);
    if(child.status!=='completed'){job.errors.push(opts.sigunguCd+'/'+opts.bjdongCd+' '+opts.startDate+'~'+opts.endDate+': '+(child.error||'오류'));job.failedWindows.push(opts);}
   }
   job.status=job.failedWindows.length?(job.failedWindows.length===retry.length?'failed':'partial'):'completed';
-  job.finishedAt=new Date().toISOString();
+  job.finishedAt=new Date().toISOString();await savePermitJob(job);
  })().catch(e=>{job.status='failed';job.error=String(e.message).slice(0,200);job.finishedAt=new Date().toISOString();});
  res.status(202).json({job});
 });
@@ -491,16 +503,17 @@ app.post('/api/admin/permits/windowed',loadUser,requireAdminRole,(req,res)=>{
  }
  permitJob={status:'running',received:0,inserted:0,updated:0,skipped:0,pages:0,completedWindows:0,totalWindows:windows.length*unique.length,errors:[],failedWindows:[],startedAt:new Date().toISOString()};
  const job=permitJob;
- void (async()=>{
+ void (async()=>{await savePermitJob(job);
   for(const region of unique)for(const window of windows){
    const child={status:'running',received:0,inserted:0,updated:0,skipped:0,pages:0,total:0};
    await permitSync(child,{...region,...window});
    for(const k of ['received','inserted','updated','skipped','pages'])job[k]+=child[k];
    job.completedWindows++;
+   await savePermitJob(job);
    if(child.status!=='completed'){job.errors.push(region.sigunguCd+'/'+region.bjdongCd+' '+window.startDate+'~'+window.endDate+': '+(child.error||'오류'));job.failedWindows.push({...region,...window});}
   }
   job.status=job.errors.length?(job.errors.length===job.totalWindows?'failed':'partial'):'completed';
-  job.finishedAt=new Date().toISOString();
+  job.finishedAt=new Date().toISOString();await savePermitJob(job);
  })().catch(e=>{job.status='failed';job.error=String(e.message).slice(0,200);job.finishedAt=new Date().toISOString();});
  res.status(202).json({job});
 });
@@ -520,15 +533,17 @@ app.post('/api/admin/permits/batch',loadUser,requireAdminRole,(req,res)=>{
  permitJob={status:'running',received:0,inserted:0,updated:0,skipped:0,pages:0,total:0,completedRegions:0,regionCount:unique.length,errors:[],startedAt:new Date().toISOString()};
  void (async()=>{
   const aggregate=permitJob;
+  await savePermitJob(aggregate);
   for(const region of unique){
    const child={status:'running',received:0,inserted:0,updated:0,skipped:0,pages:0,total:0};
    await permitSync(child,{...region,startDate,endDate});
    for(const key of ['received','inserted','updated','skipped','pages'])aggregate[key]+=child[key];
    aggregate.completedRegions++;
+   await savePermitJob(aggregate);
    if(child.status!=='completed')aggregate.errors.push(region.sigunguCd+'-'+region.bjdongCd+': '+(child.error||'수집 실패'));
   }
   aggregate.status=aggregate.errors.length?(aggregate.completedRegions===aggregate.errors.length?'failed':'partial'):'completed';
-  aggregate.finishedAt=new Date().toISOString();
+  aggregate.finishedAt=new Date().toISOString();await savePermitJob(aggregate);
  })().catch(e=>{permitJob.status='failed';permitJob.error=String(e.message).slice(0,200);permitJob.finishedAt=new Date().toISOString();});
  res.status(202).json({job:permitJob});
 });
