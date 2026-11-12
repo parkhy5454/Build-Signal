@@ -43,6 +43,7 @@ async function initDb() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
+    ALTER TABLE permit_region_queues ADD COLUMN IF NOT EXISTS run_token TEXT;
     CREATE TABLE IF NOT EXISTS permit_legal_dong_codes (
       code CHAR(10) PRIMARY KEY,
       name TEXT NOT NULL,
