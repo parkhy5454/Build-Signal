@@ -1157,6 +1157,33 @@ app.patch('/api/permits/leads/:id/followup',loadUser,async(req,res)=>{
 
 
 
+
+app.get('/api/admin/permits/team-performance',loadUser,requireAdminRole,async(req,res)=>{
+ try{
+  const rows=await query(`SELECT sp.user_key AS "userKey",
+   COUNT(*)::int AS "assignedLeads",
+   COUNT(*) FILTER (WHERE sp.status NOT IN ('WON','LOST'))::int AS "activeLeads",
+   COUNT(*) FILTER (WHERE sp.status='WON')::int AS won,
+   COUNT(*) FILTER (WHERE sp.status='LOST')::int AS lost,
+   COUNT(*) FILTER (WHERE sp.priority='HIGH' AND sp.status NOT IN ('WON','LOST'))::int AS "highPriorityActive",
+   COUNT(*) FILTER (WHERE sp.status NOT IN ('WON','LOST') AND sp.next_contact_date IS NULL)::int AS unscheduled,
+   COUNT(*) FILTER (WHERE sp.status NOT IN ('WON','LOST') AND sp.next_contact_date<(NOW() AT TIME ZONE 'Asia/Seoul')::date)::int AS overdue,
+   COUNT(*) FILTER (WHERE sp.status NOT IN ('WON','LOST') AND sp.next_contact_date=(NOW() AT TIME ZONE 'Asia/Seoul')::date)::int AS today
+   FROM sales_pipeline sp JOIN projects p ON p.id=sp.project_id
+   WHERE p.source='arch_hub_permit'
+   GROUP BY sp.user_key ORDER BY COUNT(*) DESC,sp.user_key ASC LIMIT 200`);
+  const activity=await query(`SELECT a.user_key AS "userKey",
+   COUNT(*) FILTER (WHERE a.created_at>=NOW()-INTERVAL '30 days')::int AS "last30Days"
+   FROM sales_activities a JOIN projects p ON p.id=a.project_id
+   WHERE p.source='arch_hub_permit' AND a.created_at>=NOW()-INTERVAL '30 days'
+   GROUP BY a.user_key`);
+  const activityMap=new Map(activity.rows.map(r=>[r.userKey,r.last30Days]));
+  res.json({members:rows.rows.map(r=>({...r,activities30Days:activityMap.get(r.userKey)||0})),
+   limit:200,timezone:'Asia/Seoul',
+   note:'관리자 전용 현황입니다. userKey는 영업 관리 데이터의 사용자 식별자이며, 동일 현장이 여러 사용자에게 등록되면 각각 집계됩니다. 최대 200명 표시.'});
+ }catch(e){res.status(500).json({error:'담당자별 영업 현황 조회 실패'});}
+});
+
 app.get('/api/permits/my-workload',loadUser,async(req,res)=>{
  try{
   const userKey=String(req.user.id);
