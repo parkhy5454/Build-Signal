@@ -509,7 +509,7 @@ app.post('/api/admin/permits/region-queues/:id/run-next',loadUser,requireAdminRo
   if(!queue)return res.status(404).json({error:'저장 목록 없음'});
   if(queue.status==='completed'||queue.next_batch*20>=queue.regions.length)return res.status(409).json({error:'모든 묶음이 완료되었습니다.'});
   if(queue.run_start_date&&(queue.run_start_date!==startDate||queue.run_end_date!==endDate))return res.status(409).json({error:'이 목록은 이전에 선택한 기간으로만 이어서 수집할 수 있습니다. 새 기간은 새 목록으로 저장하세요.'});
-  const locked=await query("UPDATE permit_region_queues SET status='running',run_token=$3,last_error=NULL,failed_region=NULL,failed_at=NULL,updated_at=NOW() WHERE id=$1 AND next_batch=$2 AND status IN ('prepared','failed') RETURNING id",[queue.id,queue.next_batch,runToken]);
+  const locked=await query("UPDATE permit_region_queues SET status='running',run_token=$3,run_start_date=COALESCE(run_start_date,$4),run_end_date=COALESCE(run_end_date,$5),last_error=NULL,failed_region=NULL,failed_at=NULL,updated_at=NOW() WHERE id=$1 AND next_batch=$2 AND status IN ('prepared','failed') AND (run_start_date IS NULL OR (run_start_date=$4 AND run_end_date=$5)) RETURNING id",[queue.id,queue.next_batch,runToken,startDate,endDate]);
   if(!locked.rows.length)return res.status(409).json({error:'수집 목록 상태를 확인하세요.'});
  }catch(e){return res.status(500).json({error:'수집 목록 준비 실패'});}
  const regions=queue.regions.slice(queue.next_batch*20,(queue.next_batch+1)*20);
