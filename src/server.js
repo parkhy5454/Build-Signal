@@ -479,6 +479,22 @@ app.post('/api/admin/permits/region-queues',loadUser,requireAdminRole,async(req,
 });
 
 
+
+app.get('/api/admin/permits/region-queues/:id/status',loadUser,requireAdminRole,async(req,res)=>{
+ if(!/^\d+$/.test(req.params.id))return res.status(400).json({error:'잘못된 목록 ID'});
+ try{
+  const r=await query("SELECT id,label,status,next_batch AS \"nextBatch\",jsonb_array_length(regions) AS \"regionCount\",updated_at AS \"updatedAt\" FROM permit_region_queues WHERE id=$1",[req.params.id]);
+  if(!r.rows.length)return res.status(404).json({error:'저장 목록 없음'});
+  const q=r.rows[0],batchCount=Math.ceil(q.regionCount/20);
+  const active=permitJob?.status==='running'&&String(permitJob.queueId)===String(q.id)?{
+   completedRegions:permitJob.completedRegions||0,regionCount:permitJob.regionCount||0,
+   received:permitJob.received||0,inserted:permitJob.inserted||0,updated:permitJob.updated||0,
+   startedAt:permitJob.startedAt||null
+  }:null;
+  res.json({queue:{...q,batchCount,percent:batchCount?Math.round(q.nextBatch/batchCount*100):100},active});
+ }catch(e){res.status(500).json({error:'작업 진행 상태 조회 실패'});}
+});
+
 app.post('/api/admin/permits/region-queues/:id/run-next',loadUser,requireAdminRole,async(req,res)=>{
  if(!process.env.ARCH_HUB_SERVICE_KEY)return res.status(400).json({error:'ARCH_HUB_SERVICE_KEY 미설정'});
  if(permitJob?.status==='running')return res.status(409).json({error:'다른 수집 작업이 진행 중입니다.'});
