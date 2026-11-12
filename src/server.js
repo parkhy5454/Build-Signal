@@ -1149,6 +1149,33 @@ app.patch('/api/permits/leads/:id/followup',loadUser,async(req,res)=>{
  }catch(e){res.status(500).json({error:'연락 예정일 변경 실패'});}
 });
 
+
+app.get('/api/permits/sales-overview',loadUser,async(req,res)=>{
+ try{
+  const userKey=String(req.user.id);
+  const base="FROM sales_pipeline sp JOIN projects p ON p.id=sp.project_id WHERE sp.user_key=$1 AND p.source='arch_hub_permit'";
+  const summary=await query(`SELECT COUNT(*)::int AS total,
+   COUNT(*) FILTER (WHERE sp.priority='HIGH')::int AS "highPriority",
+   COUNT(*) FILTER (WHERE sp.status='NEW')::int AS "newLeads",
+   COUNT(*) FILTER (WHERE sp.status='CONTACTED')::int AS contacted,
+   COUNT(*) FILTER (WHERE sp.status='QUALIFIED')::int AS qualified,
+   COUNT(*) FILTER (WHERE sp.status='PROPOSAL')::int AS proposals,
+   COUNT(*) FILTER (WHERE sp.status='WON')::int AS won,
+   COUNT(*) FILTER (WHERE sp.status='LOST')::int AS lost,
+   COUNT(*) FILTER (WHERE sp.status NOT IN ('WON','LOST') AND sp.next_contact_date<(NOW() AT TIME ZONE 'Asia/Seoul')::date)::int AS overdue,
+   COUNT(*) FILTER (WHERE sp.status NOT IN ('WON','LOST') AND sp.next_contact_date=(NOW() AT TIME ZONE 'Asia/Seoul')::date)::int AS today
+   ${base}`,[userKey]);
+  const urgent=await query(`SELECT p.id,p.name,p.region,sp.status,sp.priority,sp.next_contact_date AS "nextContactDate",
+   GREATEST(0,((NOW() AT TIME ZONE 'Asia/Seoul')::date-sp.next_contact_date))::int AS "overdueDays"
+   ${base} AND sp.status NOT IN ('WON','LOST') AND sp.next_contact_date<=(NOW() AT TIME ZONE 'Asia/Seoul')::date
+   ORDER BY sp.next_contact_date ASC,CASE sp.priority WHEN 'HIGH' THEN 0 WHEN 'NORMAL' THEN 1 ELSE 2 END ASC,p.id DESC LIMIT 20`,[userKey]);
+  const important=await query(`SELECT p.id,p.name,p.region,sp.status,sp.priority,sp.next_contact_date AS "nextContactDate"
+   ${base} AND sp.priority='HIGH' AND sp.status NOT IN ('WON','LOST')
+   ORDER BY sp.updated_at DESC LIMIT 20`,[userKey]);
+  res.json({summary:summary.rows[0],urgent:urgent.rows,highPriority:important.rows,timezone:'Asia/Seoul'});
+ }catch(e){res.status(500).json({error:'영업 통합 현황 조회 실패'});}
+});
+
 app.get('/api/permits/followups',loadUser,async(req,res)=>{
  try{
   const limit=Math.min(100,Math.max(1,Number.parseInt(req.query.limit,10)||50));
