@@ -457,6 +457,23 @@ app.post('/api/admin/permits/sync',loadUser,requireAdminRole,(req,res)=>{
  void (async()=>{await savePermitJob(permitJob);await permitSync(permitJob,{sigunguCd,bjdongCd,startDate,endDate});})();
  res.status(202).json({job:permitJob});
 });
+
+app.get('/api/admin/permits/regions',loadUser,requireAdminRole,async(req,res)=>{
+ try{const r=await query("SELECT id,label,sigungu_cd AS \"sigunguCd\",bjdong_cd AS \"bjdongCd\" FROM permit_region_presets ORDER BY label ASC LIMIT 500");res.json({regions:r.rows});}
+ catch(e){res.status(500).json({error:'지역 목록 조회 실패'});}
+});
+app.post('/api/admin/permits/regions',loadUser,requireAdminRole,async(req,res)=>{
+ const label=String(req.body?.label||'').trim(),sigunguCd=String(req.body?.sigunguCd||''),bjdongCd=String(req.body?.bjdongCd||'');
+ if(!label||label.length>100||!/^\d{5}$/.test(sigunguCd)||!/^\d{5}$/.test(bjdongCd))return res.status(400).json({error:'지역명(100자 이내)과 5자리 코드 두 개가 필요합니다.'});
+ try{const r=await query("INSERT INTO permit_region_presets(label,sigungu_cd,bjdong_cd) VALUES($1,$2,$3) ON CONFLICT(sigungu_cd,bjdong_cd) DO UPDATE SET label=EXCLUDED.label RETURNING id",[label,sigunguCd,bjdongCd]);res.json({id:r.rows[0].id});}
+ catch(e){res.status(500).json({error:'지역 저장 실패'});}
+});
+app.delete('/api/admin/permits/regions/:id',loadUser,requireAdminRole,async(req,res)=>{
+ if(!/^\d+$/.test(req.params.id))return res.status(400).json({error:'잘못된 지역 ID'});
+ try{await query("DELETE FROM permit_region_presets WHERE id=$1",[req.params.id]);res.json({ok:true});}
+ catch(e){res.status(500).json({error:'지역 삭제 실패'});}
+});
+
 app.get('/api/admin/permits/history',loadUser,requireAdminRole,async(req,res)=>{try{const result=await query("SELECT id,status,job_data,created_at,updated_at FROM permit_ingest_jobs ORDER BY id DESC LIMIT 30");res.json({jobs:result.rows});}catch(e){res.status(500).json({error:e.message});}});
 app.get('/api/admin/permits/progress',loadUser,requireAdminRole,(req,res)=>res.json({job:permitJob}));
 
