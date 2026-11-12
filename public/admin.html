@@ -41,12 +41,25 @@ async function loadGroupPreview(){
  try{
   const r=await fetch('/api/admin/project-groups/preview?cursor='+groupPreviewCursor+'&limit=40');
   const d=await r.json();if(!r.ok)throw new Error(d.error||'조회 실패');
-  rows.innerHTML='<table style="width:100%;font-size:12px;text-align:left"><thead><tr><th>원본 공고</th><th>예상 상위 프로젝트</th><th>검토 결과</th></tr></thead><tbody>'+d.rows.map(p=>'<tr><td>'+esc(p.notice_name)+'</td><td>'+esc(p.proposed_group_name||'미확인')+'</td><td>'+esc(p.explanation)+'</td></tr>').join('')+'</tbody></table>';
+  rows.innerHTML='<table style="width:100%;font-size:12px;text-align:left"><thead><tr><th>원본 공고</th><th>예상 상위 프로젝트</th><th>검토 결과</th></tr></thead><tbody>'+d.rows.map(p=>'<tr><td>'+esc(p.notice_name)+'</td><td>'+esc(p.proposed_group_name||'미확인')+'</td><td>'+esc(p.explanation)+(p.status==='existing_group'&&p.existing_group_id?'<button type="button" class="button group-approve" data-notice="'+p.id+'" data-group="'+p.existing_group_id+'">승인·연결</button>':'')+'</td></tr>').join('')+'</tbody></table>';
   groupPreviewCursor=d.next_cursor;
   document.getElementById('groupPreviewCursor').textContent=d.processed+'건 확인 · '+(d.done?'마지막 페이지':'다음 페이지 있음');
   btn.disabled=d.done;
  }catch(e){rows.textContent='미리보기 실패: '+e.message;btn.disabled=false;}
 }
+document.getElementById('groupPreviewRows').addEventListener('click',async e=>{
+ const btn=e.target.closest('button.group-approve');if(!btn)return;
+ const noticeId=Number(btn.dataset.notice),groupId=Number(btn.dataset.group);
+ if(!Number.isSafeInteger(noticeId)||!Number.isSafeInteger(groupId))return;
+ if(!confirm('공고 #'+noticeId+'를 기존 통합 프로젝트 #'+groupId+'에 연결할까요? 엄격한 식별키를 서버에서 다시 확인합니다.'))return;
+ btn.disabled=true;
+ try{
+  const r=await fetch('/api/admin/project-groups/approve',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({notice_id:noticeId,group_id:groupId})});
+  const d=await r.json();if(!r.ok)throw new Error(d.error||'연결 실패');
+  btn.replaceWith(document.createTextNode('연결 완료'));
+  loadGroupHealth();
+ }catch(err){alert('연결하지 못했습니다: '+err.message);btn.disabled=false;}
+});
 document.getElementById('previewGroupMatch').addEventListener('click',loadGroupPreview);
 document.getElementById('resetGroupMatch').addEventListener('click',()=>{groupPreviewCursor=0;loadGroupPreview();});
 document.getElementById('refreshGroupHealth').addEventListener('click',loadGroupHealth);
