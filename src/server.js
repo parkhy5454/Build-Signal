@@ -390,6 +390,65 @@ app.post('/api/admin/permits/test',loadUser,requireAdminRole,async(req,res)=>{
  }catch(e){res.status(502).json({error:e.name==='TimeoutError'?'API 응답 시간 초과':'건축HUB API 연결 실패'});}
 });
 
+
+let permitJob=null;
+const permitDate=v=>/^\d{8}$/.test(String(v||''))?`${v.slice(0,4)}-${v.slice(4,6)}-${v.slice(6,8)}`:null;
+async function permitSync(job,opts){
+ try{
+  const key=process.env.ARCH_HUB_SERVICE_KEY;
+  for(let page=1;page<=20;page++){
+   const url=new URL('https://apis.data.go.kr/1613000/ArchPmsHubService/getApBasisOulnInfo');
+   for(const [k,v] of Object.entries({serviceKey:key,_type:'json',sigunguCd:opts.sigunguCd,bjdongCd:opts.bjdongCd,startDate:opts.startDate,endDate:opts.endDate,numOfRows:'100',pageNo:String(page)}))url.searchParams.set(k,v);
+   const response=await fetch(url,{signal:AbortSignal.timeout(20000)});
+   if(!response.ok)throw Error('HTTP '+response.status);
+   const raw=await response.text();let data;
+   try{data=JSON.parse(raw);}catch{throw Error('JSON 응답이 아닙니다. XML/오류 응답을 확인해야 합니다.');}
+   const header=data?.response?.header||{};
+   if(String(header.resultCode)!=='00')throw Error('API 오류 코드 '+String(header.resultCode||'unknown'));
+   const body=data?.response?.body||{};
+   const entries=body.items?.item;
+   const items=Array.isArray(entries)?entries:entries?[entries]:[];
+   job.received+=items.length;job.pages=page;
+   for(const item of items){
+    const id=String(item.mgmPmsrgstPk||'').trim();
+    const address=String(item.platPlc||'').trim();
+    if(!id||!address){job.skipped++;continue;}
+    const permit=permitDate(item.archPmsDay),started=permitDate(item.realStcnsDay);
+    const stage=started?'STARTED':permit?'PERMIT':'UNKNOWN';
+    const name=String(item.bldNm||'').trim()||address+' 건축인허가';
+    const region=address.split(/\s+/)[0]||null;
+    const area=Number(item.totArea);
+    const result=await query(`INSERT INTO projects(source,external_id,name,address,region,district,building_type,stage,permit_date,start_date,area_sqm,source_url,source_updated_at)
+      VALUES('arch_hub_permit',$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+      ON CONFLICT(source,external_id) DO UPDATE SET name=EXCLUDED.name,address=EXCLUDED.address,region=EXCLUDED.region,district=EXCLUDED.district,building_type=EXCLUDED.building_type,stage=EXCLUDED.stage,permit_date=EXCLUDED.permit_date,start_date=EXCLUDED.start_date,area_sqm=EXCLUDED.area_sqm,source_url=EXCLUDED.source_url,source_updated_at=EXCLUDED.source_updated_at,updated_at=NOW()
+      RETURNING (xmax=0) AS inserted`,
+      [id,name.slice(0,500),address,region,address.split(/\s+/)[1]||null,String(item.mainPurpsCdNm||'').slice(0,300)||null,stage,permit,started,Number.isFinite(area)?area:null,
+      'https://www.data.go.kr/data/15136267/openapi.do',permitDate(item.crtnDay)]);
+    if(result.rows[0]?.inserted)job.inserted++;else job.updated++;
+   }
+   job.total=Number(body.totalCount)||0;
+   if(!items.length||page*100>=job.total)break;
+   if(page===20)throw Error('안전 제한 2000건에 도달했습니다. 더 좁은 날짜 범위로 수집하세요.');
+  }
+  job.status='completed';
+ }catch(e){job.status='failed';job.error=String(e.message).slice(0,200);}
+ finally{job.finishedAt=new Date().toISOString();}
+}
+app.post('/api/admin/permits/sync',loadUser,requireAdminRole,(req,res)=>{
+ if(!process.env.ARCH_HUB_SERVICE_KEY)return res.status(400).json({error:'ARCH_HUB_SERVICE_KEY 미설정'});
+ if(permitJob?.status==='running')return res.status(409).json({error:'이미 수집 중입니다.'});
+ const {sigunguCd,bjdongCd,startDate,endDate}=req.body||{};
+ if(!/^\d{5}$/.test(String(sigunguCd||''))||!/^\d{5}$/.test(String(bjdongCd||'')))return res.status(400).json({error:'시군구코드와 법정동코드는 각각 5자리여야 합니다.'});
+ if(!/^\d{8}$/.test(String(startDate||''))||!/^\d{8}$/.test(String(endDate||''))||startDate>endDate)return res.status(400).json({error:'날짜는 YYYYMMDD 형식이어야 합니다.'});
+ const from=Date.parse(startDate.slice(0,4)+'-'+startDate.slice(4,6)+'-'+startDate.slice(6,8));
+ const to=Date.parse(endDate.slice(0,4)+'-'+endDate.slice(4,6)+'-'+endDate.slice(6,8));
+ if(!Number.isFinite(from)||!Number.isFinite(to)||to-from>30*86400000)return res.status(400).json({error:'한 번에 최대 30일까지만 수집할 수 있습니다.'});
+ permitJob={status:'running',received:0,inserted:0,updated:0,skipped:0,pages:0,total:0,startedAt:new Date().toISOString()};
+ void permitSync(permitJob,{sigunguCd,bjdongCd,startDate,endDate});
+ res.status(202).json({job:permitJob});
+});
+app.get('/api/admin/permits/progress',loadUser,requireAdminRole,(req,res)=>res.json({job:permitJob}));
+
 // 관리자 전용 연락처 확보율과 현장별 담당자 목록
 app.get('/api/admin/contacts/coverage', loadUser, requireAdminRole, async (req,res) => {
   try {
