@@ -449,6 +449,30 @@ app.post('/api/admin/permits/sync',loadUser,requireAdminRole,(req,res)=>{
 });
 app.get('/api/admin/permits/progress',loadUser,requireAdminRole,(req,res)=>res.json({job:permitJob}));
 
+app.post('/api/admin/permits/retry',loadUser,requireAdminRole,(req,res)=>{
+ if(!process.env.ARCH_HUB_SERVICE_KEY)return res.status(400).json({error:'ARCH_HUB_SERVICE_KEY 미설정'});
+ if(!permitJob||permitJob.status==='running')return res.status(409).json({error:'재시도 가능한 완료 작업이 없습니다.'});
+ const failed=Array.isArray(permitJob.failedWindows)?permitJob.failedWindows:[];
+ if(!failed.length)return res.status(400).json({error:'재시도할 실패 구간이 없습니다.'});
+ if(failed.length>500)return res.status(400).json({error:'실패 구간이 너무 많습니다.'});
+ const retry=failed.map(w=>({...w}));
+ permitJob={status:'running',received:0,inserted:0,updated:0,skipped:0,pages:0,completedWindows:0,totalWindows:retry.length,errors:[],failedWindows:[],startedAt:new Date().toISOString(),retry:true};
+ const job=permitJob;
+ void (async()=>{
+  for(const opts of retry){
+   const child={status:'running',received:0,inserted:0,updated:0,skipped:0,pages:0,total:0};
+   await permitSync(child,opts);
+   for(const k of ['received','inserted','updated','skipped','pages'])job[k]+=child[k];
+   job.completedWindows++;
+   if(child.status!=='completed'){job.errors.push(opts.sigunguCd+'/'+opts.bjdongCd+' '+opts.startDate+'~'+opts.endDate+': '+(child.error||'오류'));job.failedWindows.push(opts);}
+  }
+  job.status=job.failedWindows.length?(job.failedWindows.length===retry.length?'failed':'partial'):'completed';
+  job.finishedAt=new Date().toISOString();
+ })().catch(e=>{job.status='failed';job.error=String(e.message).slice(0,200);job.finishedAt=new Date().toISOString();});
+ res.status(202).json({job});
+});
+
+
 app.post('/api/admin/permits/windowed',loadUser,requireAdminRole,(req,res)=>{
  if(!process.env.ARCH_HUB_SERVICE_KEY)return res.status(400).json({error:'ARCH_HUB_SERVICE_KEY 미설정'});
  if(permitJob?.status==='running')return res.status(409).json({error:'이미 수집 중입니다.'});
@@ -465,7 +489,7 @@ app.post('/api/admin/permits/windowed',loadUser,requireAdminRole,(req,res)=>{
   const compact=t=>new Date(t).toISOString().slice(0,10).replace(/-/g,'');
   windows.push({startDate:compact(from),endDate:compact(to)});
  }
- permitJob={status:'running',received:0,inserted:0,updated:0,skipped:0,pages:0,completedWindows:0,totalWindows:windows.length*unique.length,errors:[],startedAt:new Date().toISOString()};
+ permitJob={status:'running',received:0,inserted:0,updated:0,skipped:0,pages:0,completedWindows:0,totalWindows:windows.length*unique.length,errors:[],failedWindows:[],startedAt:new Date().toISOString()};
  const job=permitJob;
  void (async()=>{
   for(const region of unique)for(const window of windows){
@@ -473,7 +497,7 @@ app.post('/api/admin/permits/windowed',loadUser,requireAdminRole,(req,res)=>{
    await permitSync(child,{...region,...window});
    for(const k of ['received','inserted','updated','skipped','pages'])job[k]+=child[k];
    job.completedWindows++;
-   if(child.status!=='completed')job.errors.push(region.sigunguCd+'/'+region.bjdongCd+' '+window.startDate+'~'+window.endDate+': '+(child.error||'오류'));
+   if(child.status!=='completed'){job.errors.push(region.sigunguCd+'/'+region.bjdongCd+' '+window.startDate+'~'+window.endDate+': '+(child.error||'오류'));job.failedWindows.push({...region,...window});}
   }
   job.status=job.errors.length?(job.errors.length===job.totalWindows?'failed':'partial'):'completed';
   job.finishedAt=new Date().toISOString();
