@@ -607,19 +607,25 @@ document.getElementById('permitRegionalLeadChoose').addEventListener('click',()=
 });
 let permitRegionalCsvRows=null;
 function permitRegionalCsvCell(value){
- const raw=String(value??'');
- const safe=/^[\s]*[=+@-]/.test(raw)?"'"+raw:raw;
+ const raw=String(value??'').replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g,'');
+ // Spreadsheet software may interpret formula-like values, including after whitespace, as executable formulas.
+ const safe=/^[\s\uFEFF]*[=+@-]/.test(raw)?"'"+raw:raw;
  return '"'+safe.replace(/"/g,'""')+'"';
+}
+function permitRegionalCsvDate(value){
+ if(!value)return '';
+ const d=new Date(value);
+ return Number.isNaN(d.getTime())?String(value):d.toISOString().slice(0,10);
 }
 document.getElementById('permitRegionalLeadsCsv').addEventListener('click',()=>{
  if(!permitRegionalCsvRows||!permitRegionalCsvRows.rows.length)return;
  const d=permitRegionalCsvRows;
  const columns=['현장ID','현장명','주소','지역','건축용도','건축단계','허가일','연면적(㎡)','영업점수','영업상태','추천이유'];
- const rows=d.rows.map(x=>[x.id,x.name,x.address,x.region,x.buildingType,x.stage,x.permitDate,x.areaSqm,x.score,x.pipelineStatus||'미등록',(x.reasons||[]).join(' / ')]);
+ const rows=d.rows.map(x=>[x.id,x.name,x.address,x.region,x.buildingType,x.stage,permitRegionalCsvDate(x.permitDate),x.areaSqm,x.score,x.pipelineStatus||'미등록',(x.reasons||[]).join(' / ')]);
  const csv='\uFEFF'+[columns,...rows].map(row=>row.map(permitRegionalCsvCell).join(',')).join('\r\n');
  const blob=new Blob([csv],{type:'text/csv;charset=utf-8'});
  const url=URL.createObjectURL(blob),a=document.createElement('a');
- a.href=url;a.download='build-signal-regional-leads.csv';document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
+ a.href=url;a.download='build-signal-regional-leads-'+new Date().toISOString().slice(0,10)+'.csv';document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
 });
 let permitRegionalQueryVersion=0;
 function clearPermitRegionalLeadResults(){
