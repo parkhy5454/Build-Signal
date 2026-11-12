@@ -530,6 +530,41 @@ app.post('/api/admin/project-groups/approve',loadUser,requireAdminRole,async(req
  }catch(e){res.status(500).json({error:e.message});}
 });
 
+// Store only attributable, manually reviewed public organization details.
+app.post('/api/admin/project-groups/:id/contacts',loadUser,requireAdminRole,async(req,res)=>{
+ try{
+  const groupId=Number(req.params.id);
+  if(!Number.isSafeInteger(groupId)||groupId<=0)return res.status(400).json({error:'잘못된 프로젝트 ID'});
+  const role=String(req.body?.role||'').trim();
+  const organization=String(req.body?.organization||'').trim().slice(0,200);
+  const department=String(req.body?.department||'').trim().slice(0,120)||null;
+  const personName=String(req.body?.person_name||'').trim().slice(0,100)||null;
+  const phone=String(req.body?.phone||'').trim().slice(0,80)||null;
+  const email=String(req.body?.email||'').trim().slice(0,200)||null;
+  const sourceUrl=String(req.body?.source_url||'').trim().slice(0,1000);
+  if(!['client','designer','supervisor','contractor'].includes(role)||!organization)
+    return res.status(400).json({error:'참여기관 유형과 기관명은 필수입니다.'});
+  let url;
+  try{url=new URL(sourceUrl);}catch{return res.status(400).json({error:'근거가 되는 공개자료 URL을 입력하세요.'});}
+  if(!['http:','https:'].includes(url.protocol)||!url.hostname.includes('.'))
+    return res.status(400).json({error:'HTTP(S) 공개자료 URL만 허용됩니다.'});
+  if(email&&!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
+    return res.status(400).json({error:'이메일 형식을 확인하세요.'});
+  const g=await query('SELECT id FROM project_groups WHERE id=$1',[groupId]);
+  if(!g.rowCount)return res.status(404).json({error:'프로젝트를 찾을 수 없습니다.'});
+  const result=await query(`INSERT INTO project_group_contacts
+    (group_id,role,organization,department,person_name,phone,email,source,source_url)
+    VALUES($1,$2,$3,$4,$5,$6,$7,'manual_public',$8)
+    ON CONFLICT(group_id,role,organization,source) DO UPDATE SET
+      department=EXCLUDED.department,person_name=EXCLUDED.person_name,
+      phone=EXCLUDED.phone,email=EXCLUDED.email,source_url=EXCLUDED.source_url,
+      verified_at=NULL,updated_at=NOW()
+    RETURNING id,group_id,role,organization,source,source_url,verified_at`,
+    [groupId,role,organization,department,personName,phone,email,url.href]);
+  res.status(201).json({ok:true,contact:result.rows[0],note:'출처 URL이 등록되었습니다. 실제 내용의 검증 완료를 의미하지 않습니다.'});
+ }catch(e){res.status(500).json({error:e.message});}
+});
+
 app.post('/api/admin/project-groups/backfill',loadUser,requireAdminRole,async(req,res)=>{
  try{
   const limit=Math.min(500,Math.max(1,parseInt(req.body?.limit,10)||200));
