@@ -392,7 +392,7 @@ app.post('/api/admin/permits/test',loadUser,requireAdminRole,async(req,res)=>{
 
 
 let permitJob=null;
-const permitDate=v=>/^\d{8}$/.test(String(v||''))?`${v.slice(0,4)}-${v.slice(4,6)}-${v.slice(6,8)}`:null;
+const permitDate=v=>{const x=String(v||'');if(!/^\d{8}$/.test(x))return null;const iso=`${x.slice(0,4)}-${x.slice(4,6)}-${x.slice(6,8)}`;const d=new Date(iso+'T00:00:00Z');return Number.isFinite(d.getTime())&&d.toISOString().slice(0,10)===iso?iso:null;};
 async function permitSync(job,opts){
  try{
   const key=process.env.ARCH_HUB_SERVICE_KEY;
@@ -422,12 +422,12 @@ async function permitSync(job,opts){
       VALUES('arch_hub_permit',$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
       ON CONFLICT(source,external_id) DO UPDATE SET name=EXCLUDED.name,address=EXCLUDED.address,region=EXCLUDED.region,district=EXCLUDED.district,building_type=EXCLUDED.building_type,stage=EXCLUDED.stage,permit_date=EXCLUDED.permit_date,start_date=EXCLUDED.start_date,area_sqm=EXCLUDED.area_sqm,source_url=EXCLUDED.source_url,source_updated_at=EXCLUDED.source_updated_at,updated_at=NOW()
       RETURNING (xmax=0) AS inserted`,
-      [id,name.slice(0,500),address,region,address.split(/\s+/)[1]||null,String(item.mainPurpsCdNm||'').slice(0,300)||null,stage,permit,started,Number.isFinite(area)?area:null,
+      [id,name.slice(0,500),address,region,address.split(/\s+/)[1]||null,String(item.mainPurpsCdNm||'').slice(0,300)||null,stage,permit,started,Number.isFinite(area)&&area>0?area:null,
       'https://www.data.go.kr/data/15136267/openapi.do',permitDate(item.crtnDay)]);
     if(result.rows[0]?.inserted)job.inserted++;else job.updated++;
    }
    job.total=Number(body.totalCount)||0;
-   if(!items.length||page*100>=job.total)break;
+   if(!items.length||(job.total>0&&page*100>=job.total)||items.length<100)break;
    if(page===20)throw Error('안전 제한 2000건에 도달했습니다. 더 좁은 날짜 범위로 수집하세요.');
   }
   job.status='completed';
@@ -442,7 +442,7 @@ app.post('/api/admin/permits/sync',loadUser,requireAdminRole,(req,res)=>{
  if(!/^\d{8}$/.test(String(startDate||''))||!/^\d{8}$/.test(String(endDate||''))||startDate>endDate)return res.status(400).json({error:'날짜는 YYYYMMDD 형식이어야 합니다.'});
  const from=Date.parse(startDate.slice(0,4)+'-'+startDate.slice(4,6)+'-'+startDate.slice(6,8));
  const to=Date.parse(endDate.slice(0,4)+'-'+endDate.slice(4,6)+'-'+endDate.slice(6,8));
- if(!Number.isFinite(from)||!Number.isFinite(to)||to-from>30*86400000)return res.status(400).json({error:'한 번에 최대 30일까지만 수집할 수 있습니다.'});
+ if(!permitDate(startDate)||!permitDate(endDate)||!Number.isFinite(from)||!Number.isFinite(to)||to-from>29*86400000)return res.status(400).json({error:'한 번에 최대 30일까지만 수집할 수 있습니다.'});
  permitJob={status:'running',received:0,inserted:0,updated:0,skipped:0,pages:0,total:0,startedAt:new Date().toISOString()};
  void permitSync(permitJob,{sigunguCd,bjdongCd,startDate,endDate});
  res.status(202).json({job:permitJob});
