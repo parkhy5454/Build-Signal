@@ -1152,6 +1152,37 @@ app.patch('/api/permits/leads/:id/followup',loadUser,async(req,res)=>{
 
 
 
+
+app.get('/api/permits/sales-conversions',loadUser,async(req,res)=>{
+ try{
+  const days=Number.parseInt(req.query.days,10)||30;
+  if(![7,30,90,365].includes(days))return res.status(400).json({error:'기간은 7, 30, 90, 365일 중 선택하세요.'});
+  const userKey=String(req.user.id);
+  const events=await query(`SELECT h.project_id AS "projectId",h.from_status AS "fromStatus",
+   h.to_status AS "toStatus",h.changed_at AS "changedAt"
+   FROM sales_stage_history h JOIN projects p ON p.id=h.project_id
+   WHERE h.user_key=$1 AND p.source='arch_hub_permit'
+   AND h.changed_at >= NOW()-($2::int * INTERVAL '1 day')
+   ORDER BY h.changed_at ASC,h.id ASC LIMIT 20000`,[userKey,days]);
+  const stages=['NEW','CONTACTED','QUALIFIED','PROPOSAL','WON','LOST'];
+  const counts=Object.fromEntries(stages.map(k=>[k,0]));
+  const unique=Object.fromEntries(stages.map(k=>[k,new Set()]));
+  const transitions={};
+  for(const e of events.rows){
+   if(!Object.prototype.hasOwnProperty.call(counts,e.toStatus))continue;
+   counts[e.toStatus]++;
+   unique[e.toStatus].add(String(e.projectId));
+   const from=e.fromStatus||'INITIAL',key=from+' → '+e.toStatus;
+   transitions[key]=(transitions[key]||0)+1;
+  }
+  const pairs=Object.entries(transitions).map(([transition,count])=>({transition,count})).sort((a,b)=>b.count-a.count);
+  res.json({days,eventCount:events.rows.length,truncated:events.rows.length===20000,
+   entries:counts,uniqueProjects:Object.fromEntries(stages.map(k=>[k,unique[k].size])),
+   transitions:pairs,
+   note:'선택 기간 내 기록된 단계 진입 횟수와 고유 현장 수입니다. 단계 건너뛰기·재진입이 가능하므로 단계 간 전환율로 해석하면 안 됩니다. 최대 20,000개 이벤트를 분석합니다.'});
+ }catch(e){res.status(500).json({error:'영업 단계 전환 현황 분석 실패'});}
+});
+
 app.get('/api/permits/sales-stage-history',loadUser,async(req,res)=>{
  try{
   const limit=Math.min(100,Math.max(1,Number.parseInt(req.query.limit,10)||50));
