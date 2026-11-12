@@ -187,6 +187,7 @@ document.getElementById('legalDongQueueStatus').addEventListener('click',async()
   const r=await fetch('/api/admin/permits/region-queues/'+encodeURIComponent(id)+'/status');
   const d=await r.json();if(!r.ok)throw Error(d.error||'상태 조회 실패');
   const q=d.queue,lines=['목록: '+q.label,'상태: '+q.status,'완료 묶음: '+q.nextBatch+' / '+q.batchCount,'진행률: '+q.percent+'%','최근 DB 갱신: '+new Date(q.updatedAt).toLocaleString()];
+  if(q.lastError)lines.push('마지막 실패 지역: '+(q.failedRegion||'확인 불가'),'실패 원인: '+q.lastError,'실패 시각: '+(q.failedAt?new Date(q.failedAt).toLocaleString():'확인 불가'));
   if(d.active)lines.push('현재 묶음 지역 완료: '+d.active.completedRegions+' / '+d.active.regionCount,'API 수신: '+d.active.received+'건','신규 저장: '+d.active.inserted+'건','기존 갱신: '+d.active.updated+'건');
   else if(q.status==='running')lines.push('현재 서버에서 실행 정보가 확인되지 않습니다. 다른 서버 실행 중이거나 재시작되었을 수 있습니다.');
   out.textContent=lines.join('\n');
