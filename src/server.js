@@ -386,7 +386,7 @@ app.get("/api/projects", async (req, res) => {
     const { q = "", region = "", stage = "", type = "", contact = "", page = "1", limit = "30" } = req.query;
     const p = Math.max(1, Number(page) || 1), l = Math.min(100, Math.max(1, Number(limit) || 30));
     const params = [], where = [];
-    function add(v, sql) { params.push(v); where.push(sql.replace(/\\?/g, `$${params.length}`)); }
+    function add(v, sql) { where.push(sql.replace(/\?/g, () => { params.push(v); return `$${params.length}`; })); }
     const keyword = String(q).trim().slice(0,120);
     if (keyword) add(`%${keyword}%`, "(p.name ILIKE ? OR p.address ILIKE ? OR p.owner ILIKE ? OR p.designer ILIKE ? OR p.contractor ILIKE ? OR EXISTS (SELECT 1 FROM project_contacts pc WHERE pc.project_id=p.id AND (pc.organization ILIKE ? OR pc.person_name ILIKE ?)))");
     if (region) add(`%${String(region).slice(0,60)}%`, "p.region ILIKE ?");
