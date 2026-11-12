@@ -579,6 +579,9 @@ document.getElementById('permitRegionalBulkAdd').addEventListener('click',async(
  if(ids.length>30){out.textContent='한 번에 최대 30건만 등록할 수 있습니다.';return;}
  if(!confirm('선택한 '+ids.length+'개 현장을 신규(NEW) 단계로 등록할까요? 기존 등록 현장은 변경되지 않습니다.'))return;
  const btn=document.getElementById('permitRegionalBulkAdd');permitRegionalBulkSubmitting=true;btn.disabled=true;
+ const lockedIds=['permitRegionalLeadRegion','permitLeadProfile','permitRegionalLeadStage','permitRegionalLeadDays','permitRegionalLeadRegistration','permitRegionalLeadsLoad','permitRegionalBulkSelectAll','permitRegionalBulkClear'];
+ lockedIds.forEach(id=>{document.getElementById(id).disabled=true;});
+ document.querySelectorAll('.permit-regional-bulk').forEach(box=>{box.disabled=true;});
  const requestVersion=permitRegionalQueryVersion;out.textContent='선택 현장 등록 중...';
  try{
   const r=await fetch('/api/permits/leads/pipeline/bulk',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({projectIds:ids})});
@@ -586,7 +589,11 @@ document.getElementById('permitRegionalBulkAdd').addEventListener('click',async(
   const message='신규 등록 '+d.added+'건 / 이미 등록됨 '+d.alreadyRegistered+'건 / 대상 없음 '+d.notFound+'건. '+d.note;
   if(requestVersion===permitRegionalQueryVersion && (d.added>0||d.alreadyRegistered>0))await loadPermitRegionalLeads();
   out.textContent=message;
- }catch(e){out.textContent=e.message;}finally{permitRegionalBulkSubmitting=false;btn.disabled=false;}
+ }catch(e){out.textContent=e.message;}finally{
+  permitRegionalBulkSubmitting=false;btn.disabled=false;
+  lockedIds.forEach(id=>{document.getElementById(id).disabled=false;});
+  document.querySelectorAll('.permit-regional-bulk').forEach(box=>{box.disabled=Boolean(box.title.startsWith('이미 영업 등록됨'));});
+ }
 });
 document.getElementById('permitRegionalLeadChoose').addEventListener('click',()=>{
  const id=document.getElementById('permitRegionalLeadSelect').value;
