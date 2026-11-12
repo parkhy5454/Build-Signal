@@ -680,6 +680,26 @@ app.delete('/api/admin/permits/regions/:id',loadUser,requireAdminRole,async(req,
 });
 
 
+
+app.get('/api/admin/permits/regional-opportunities',loadUser,requireAdminRole,async(req,res)=>{
+ try{
+  const days=Number(req.query.days||30);
+  if(![7,30,90].includes(days))return res.status(400).json({error:'기간은 7·30·90일 중 선택하세요.'});
+  const result=await query(`SELECT COALESCE(NULLIF(BTRIM(region),''),'지역 미확인') AS region,
+   COUNT(*)::int AS "totalSites",
+   COUNT(*) FILTER (WHERE created_at>=NOW()-($1::int*INTERVAL '1 day'))::int AS "newSites",
+   COUNT(*) FILTER (WHERE updated_at>=NOW()-($1::int*INTERVAL '1 day'))::int AS "updatedSites",
+   COUNT(*) FILTER (WHERE stage='PERMIT')::int AS "permitStage",
+   COUNT(*) FILTER (WHERE stage='STARTED')::int AS "startedStage",
+   COUNT(*) FILTER (WHERE stage='UNKNOWN')::int AS "unknownStage",
+   COUNT(*) FILTER (WHERE created_at>=NOW()-($1::int*INTERVAL '1 day') AND stage='PERMIT')::int AS "newPermitStage"
+   FROM projects WHERE source='arch_hub_permit'
+   GROUP BY COALESCE(NULLIF(BTRIM(region),''),'지역 미확인')
+   ORDER BY "newSites" DESC,"totalSites" DESC,region ASC LIMIT 100`,[days]);
+  res.json({days,regions:result.rows,note:'지역은 원천 주소 첫 단어를 사용한 간이 구분입니다. 신규 현장은 DB 최초 등록 시각 기준이며 실제 건축허가일 기준이 아닙니다. 인허가 단계 현장 수는 영업 가능성을 판단하기 위한 참고값이지 실제 수주 가능 현장 수가 아닙니다.'});
+ }catch(e){res.status(500).json({error:'지역별 건축허가 현장 분석 실패'});}
+});
+
 app.get('/api/admin/permits/ingestion-summary',loadUser,requireAdminRole,async(req,res)=>{
  try{
   const period=Number(req.query.days||30);
