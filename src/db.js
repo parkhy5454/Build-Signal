@@ -33,6 +33,14 @@ async function initDb() {
       approved_at TIMESTAMPTZ
     );
     CREATE INDEX IF NOT EXISTS idx_users_status ON users(status);
+    CREATE TABLE IF NOT EXISTS permit_region_presets (
+      id BIGSERIAL PRIMARY KEY,
+      label TEXT NOT NULL,
+      sigungu_cd CHAR(5) NOT NULL,
+      bjdong_cd CHAR(5) NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE(sigungu_cd,bjdong_cd)
+    );
     CREATE TABLE IF NOT EXISTS permit_ingest_jobs (
       id BIGSERIAL PRIMARY KEY,
       status TEXT NOT NULL DEFAULT 'running',
