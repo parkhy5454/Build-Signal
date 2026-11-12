@@ -29,7 +29,7 @@ async function loadGroupHealth(){
   const r=await fetch('/api/admin/project-groups/health');const d=await r.json();
   if(!r.ok)throw new Error(d.error||'조회 실패');
   const x=d.summary;
-  summary.textContent='나라장터 공고 '+x.total_notices+'건 / 통합 프로젝트 '+x.total_groups+'개 (공고 연결된 그룹 '+x.active_groups+'개)\\n연결 공고 '+x.linked_notices+'건 / 미연결 공고 '+x.unlinked_notices+'건\\n※ 미연결은 오류가 아닐 수 있습니다. 보수적 통합 기준에 해당하지 않는 공고는 개별 유지됩니다.';
+  summary.textContent='나라장터 공고 '+x.total_notices+'건 / 통합 프로젝트 '+x.total_groups+'개 (공고 연결된 그룹 '+x.active_groups+'개)\n연결 공고 '+x.linked_notices+'건 / 미연결 공고 '+x.unlinked_notices+'건\n※ 미연결은 오류가 아닐 수 있습니다. 보수적 통합 기준에 해당하지 않는 공고는 개별 유지됩니다.';
   rows.innerHTML='<h3 style="margin-top:16px">최근 미연결 공고 (최대 40건)</h3><table style="width:100%;font-size:12px;text-align:left"><thead><tr><th>공고명</th><th>발주처</th><th>지역</th><th>진단</th></tr></thead><tbody>'+d.recent_unlinked.map(p=>'<tr><td>'+esc(p.name)+'</td><td>'+esc(p.owner)+'</td><td>'+esc(p.region)+'</td><td>'+esc(p.reason)+'</td></tr>').join('')+'</tbody></table>';
  }catch(e){summary.textContent='통합 프로젝트 연결 현황 조회 실패: '+e.message;}
  finally{btn.disabled=false;}
