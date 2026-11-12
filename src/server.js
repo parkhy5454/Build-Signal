@@ -462,6 +462,34 @@ app.post('/api/admin/permits/sync',loadUser,requireAdminRole,(req,res)=>{
 
 
 
+
+app.get('/api/admin/permits/data-quality',loadUser,requireAdminRole,async(req,res)=>{
+ try{
+  const totals=await query(`SELECT COUNT(*)::int AS total,
+   COUNT(*) FILTER (WHERE permit_date IS NULL)::int AS missing_permit_date,
+   COUNT(*) FILTER (WHERE address IS NULL OR BTRIM(address)='')::int AS missing_address,
+   COUNT(*) FILTER (WHERE building_type IS NULL OR BTRIM(building_type)='')::int AS missing_building_type,
+   COUNT(*) FILTER (WHERE area_sqm IS NULL OR area_sqm<=0)::int AS missing_area,
+   COUNT(*) FILTER (WHERE stage='UNKNOWN')::int AS unknown_stage,
+   COUNT(*) FILTER (WHERE external_id IS NULL OR BTRIM(external_id)='')::int AS missing_external_id
+   FROM projects WHERE source='arch_hub_permit'`);
+  const duplicates=await query(`SELECT COUNT(*)::int AS duplicate_groups FROM (
+    SELECT external_id FROM projects WHERE source='arch_hub_permit' AND external_id IS NOT NULL GROUP BY external_id HAVING COUNT(*)>1
+   ) d`);
+  const recent=await query(`SELECT id,name,address,permit_date AS "permitDate",building_type AS "buildingType",area_sqm AS "areaSqm",stage,
+   CASE WHEN permit_date IS NULL THEN '허가일 없음'
+        WHEN building_type IS NULL OR BTRIM(building_type)='' THEN '용도 없음'
+        WHEN area_sqm IS NULL OR area_sqm<=0 THEN '면적 없음'
+        WHEN stage='UNKNOWN' THEN '단계 미확인'
+        ELSE '기타' END AS issue
+   FROM projects WHERE source='arch_hub_permit'
+    AND (permit_date IS NULL OR building_type IS NULL OR BTRIM(building_type)='' OR area_sqm IS NULL OR area_sqm<=0 OR stage='UNKNOWN')
+   ORDER BY updated_at DESC LIMIT 30`);
+  res.json({summary:{...totals.rows[0],duplicateGroups:duplicates.rows[0].duplicate_groups},recentIssues:recent.rows,
+   note:'누락값은 원천 API 미제공일 수 있으며 실제 수집 누락을 뜻하지 않습니다. 외부 원천 데이터와 대조한 완전성 검증은 포함되지 않습니다.'});
+ }catch(e){res.status(500).json({error:'건축허가 데이터 품질 분석 실패'});}
+});
+
 app.get('/api/admin/permits/region-queues',loadUser,requireAdminRole,async(req,res)=>{
  try{const r=await query("SELECT id,label,query_text AS \"queryText\",status,next_batch AS \"nextBatch\",jsonb_array_length(regions) AS \"regionCount\",created_at AS \"createdAt\" FROM permit_region_queues ORDER BY id DESC LIMIT 50");res.json({queues:r.rows});}
  catch(e){res.status(500).json({error:'저장된 수집 목록 조회 실패'});}
