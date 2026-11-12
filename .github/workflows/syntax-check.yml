@@ -16,6 +16,8 @@ jobs:
           node-version: '20'
       - name: Check server JavaScript
         run: node --check src/server.js
+      - name: Test national building lifecycle ingestion
+        run: node --test test/archhub.test.js
       - name: Check client JavaScript
         run: node --check public/app.js
       - name: Check admin inline script
