@@ -1,8 +1,8 @@
-const stageLabel={PERMIT:"인허가",STARTED:"착공",COMPLETED:"준공",BID:"입찰",UNKNOWN:"확인 필요"};
+const stageLabel={REVIEW:"심의",PERMIT:"인허가",STARTED:"착공",COMPLETED:"준공",BID:"입찰",UNKNOWN:"확인 필요"};
 const $=id=>document.getElementById(id);
 let currentPage="dashboard",searchPage=1,searchTotalPages=1;
 function esc(s){return String(s??"-").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
-function stageSearch(value){return ({인허가:"PERMIT",허가:"PERMIT",착공:"STARTED",준공:"COMPLETED",사용승인:"COMPLETED",입찰:"BID"})[String(value).trim()]||"";}
+function stageSearch(value){return ({심의:"REVIEW",인허가:"PERMIT",허가:"PERMIT",착공:"STARTED",준공:"COMPLETED",사용승인:"COMPLETED",입찰:"BID"})[String(value).trim()]||"";}
 function emptyProjectSearch(d){
  const counts=d.coverage||{},stage=d.selectedStage;
  const message=stage&&counts[stage]===0?`${stageLabel[stage]} 단계로 저장된 현장이 아직 없습니다.`:'선택한 검색 조건에 맞는 현장이 없습니다. 지역·기간·연락처 조건을 확인해 주세요.';
@@ -11,8 +11,8 @@ function emptyProjectSearch(d){
 }
 function fmt(n){return Number(n||0).toLocaleString("ko-KR");}
 function card(p,score){
- const badges=[p.has_phone?'<span class="signal-tag success">☎ 전화 확보</span>':'',p.has_email?'<span class="signal-tag success">✉ 이메일 확보</span>':'',p.contact_count>0?`<span class="signal-tag">${fmt(p.contact_count)}개 연락처</span>`:''].filter(Boolean).join('');
- return `<article class="project-card"><div class="project-main"><div class="project-topline"><span class="tag ${p.stage==="STARTED"?"green":""}">${stageLabel[p.stage]||"확인 필요"}</span><span class="project-source">${esc(p.source==='g2b_bid'?'나라장터 실제 공고':p.source==='demo'?'데모 데이터':p.source==='arch_hub_permit'?'건축HUB 인허가':p.source||'')}</span></div><h4>${esc(p.name)}</h4><p>${esc(p.address||"현장 주소 확인 중")}</p><div class="meta"><span>발주처: ${esc(p.owner||"확인 중")}</span><span>공종: ${esc(p.building_type||"미확인")}</span><span>${esc(p.region||"")}</span></div><div class="signal-tags">${badges||'<span class="signal-tag muted-tag">연락처 확인 중</span>'}</div></div><div class="card-actions">${score!==undefined?`<span class="score">${score}점</span>`:""}<button class="button primary" onclick="detail(${Number(p.id)})">상세·연락처 보기</button></div></article>`;
+ const badges=[p.party_count?`<span class="signal-tag">참여업체 근거 ${fmt(p.party_count)}건</span>`:'',p.has_phone?'<span class="signal-tag success">☎ 전화 확보</span>':'',p.has_email?'<span class="signal-tag success">✉ 이메일 확보</span>':'',p.contact_count>0?`<span class="signal-tag">${fmt(p.contact_count)}개 연락처</span>`:''].filter(Boolean).join('');
+ return `<article class="project-card"><div class="project-main"><div class="project-topline"><span class="tag ${p.stage==="STARTED"?"green":""}">${stageLabel[p.stage]||"확인 필요"}</span><span class="project-source">${esc(p.source==='g2b_bid'?'나라장터 실제 공고':p.source==='demo'?'데모 데이터':p.source==='arch_hub_permit'?'건축HUB 인허가':p.source==='public_review'?'지자체 심의자료':p.source||'')}</span></div><h4>${esc(p.name)}</h4><p>${esc(p.address||"현장 주소 확인 중")}</p><div class="meta"><span>${p.owner?'발주처':p.owner_evidence?'건축주(원문 추출)':p.applicant_evidence?'심의 신청인(원문 추출)':'건축주'}: ${esc(p.owner||p.owner_evidence||p.applicant_evidence||"확인 중")}</span><span>공종: ${esc(p.building_type||"미확인")}</span><span>${esc(p.region||"")}</span></div><div class="signal-tags">${badges||'<span class="signal-tag muted-tag">연락처 확인 중</span>'}</div></div><div class="card-actions">${score!==undefined?`<span class="score">${score}점</span>`:""}<button class="button primary" onclick="detail(${Number(p.id)})">상세·연락처 보기</button></div></article>`;
 }
 async function api(url,opts){const r=await fetch(url,opts);const d=await r.json();if(!r.ok)throw new Error(d.error||"요청에 실패했습니다.");return d;}
 async function contactSummary(){
@@ -42,7 +42,7 @@ async function search(page=1){
 }
 async function recommendations(){try{const d=await api("/api/recommendations?profile="+$("profile").value);$("recommendResults").innerHTML=d.rows.length?d.rows.map(p=>card(p,p.score)).join(""):'<div class="panel">추천할 현장이 없습니다.</div>';}catch(e){$("recommendResults").innerHTML=`<div class="notice">${esc(e.message)}</div>`;}}
 async function favorites(){try{const d=await api("/api/favorites");$("favoriteResults").innerHTML=d.rows.length?d.rows.map(p=>card(p)).join(""):'<div class="panel">관심 현장이 없습니다. 현장 상세에서 ☆ 관심 등록을 눌러주세요.</div>';}catch(e){$("favoriteResults").innerHTML=`<div class="notice">${esc(e.message)}</div>`;}}
-const roleLabels={client:'발주처·시행사',designer:'설계사',supervisor:'감리사',contractor:'시공사'};
+const roleLabels={client:'발주기관',designer:'설계사',supervisor:'감리사',contractor:'시공사'};
 function contactCard(c){
  const contact=(c.person_name?`<div class="contact-person">담당자 ${esc(c.person_name)}${c.department?' · '+esc(c.department):''}</div>`:'<div class="contact-person">담당자 미확인</div>');
  const phone=c.phone&&/^[+0-9() .-]{7,25}$/.test(c.phone)?`<a class="contact-link" href="tel:${esc(c.phone.replace(/[^+0-9]/g,''))}">☎ ${esc(c.phone)}</a>`:'<span class="contact-unavailable">전화 미확인</span>';
@@ -56,9 +56,11 @@ window.detail=async id=>{
  const p=await api("/api/projects/"+id);
  const fields=[["현장 주소",p.address],["지역",`${p.region||"-"} ${p.district||""}`],["공종·건물 용도",p.building_type],["진행 단계",stageLabel[p.stage]],["공사금액",p.estimated_cost?fmt(p.estimated_cost)+"원":"미확인"],["인허가일",p.permit_date],["착공일",p.start_date],["준공일",p.completion_date],["연면적",p.area_sqm?fmt(p.area_sqm)+"㎡":null],["정보 출처",p.source]];
  const contacts=p.contacts||[];
+ const evidenceHtml=partyEvidenceHtml(p.partyEvidence||[]);
+ const phaseHtml=phaseHistoryHtml(p.phaseProjects||[]);
  const roles=['client','designer','supervisor','contractor'];
  const contactHtml=roles.map(role=>`<section class="role-section"><div class="role-heading"><h4>${roleLabels[role]}</h4><span class="role-count">${contacts.filter(c=>c.role===role).length}개</span></div>${contacts.filter(c=>c.role===role).length?contacts.filter(c=>c.role===role).map(contactCard).join(''):`<div class="empty-contact">현재 확인된 ${roleLabels[role]} 담당자 연락처가 없습니다. 외부 데이터 연계로 보완 예정입니다.</div>`}</section>`).join('');
- $("modalBody").innerHTML=`<span class="eyebrow">BUILD SIGNAL · 프로젝트 상세</span><h2 class="project-detail-title">${esc(p.name)}</h2><p class="muted">${esc(p.source==='g2b_bid'?'나라장터 공고 기반 프로젝트':p.source==='demo'?'가상 데모 프로젝트':'프로젝트 정보')}</p><div class="detail-grid">${fields.map(([k,v])=>`<div class="detail-item"><small>${k}</small><b>${esc(v||"확인되지 않음")}</b></div>`).join("")}</div><div class="contact-section-title"><h3>참여 업체 및 담당자 연락처</h3><p>공개 출처에서 확인된 정보만 표시합니다.</p></div><div class="roles-grid">${contactHtml}</div><div class="pipeline"><button class="button ${p.favorite?"primary":"light"}" id="favBtn">${p.favorite?"★ 관심 해제":"☆ 관심 등록"}</button><label>영업 단계<select id="pipeStatus"><option value="NEW">신규</option><option value="CONTACTED">접촉</option><option value="MEETING">미팅</option><option value="PROPOSAL">제안</option><option value="WON">수주</option><option value="LOST">실패</option></select></label></div><label class="note-label">영업 메모<textarea id="pipeNote" rows="3">${esc(p.pipeline?.note||'')}</textarea></label><button class="button primary" id="savePipeline">영업정보 저장</button>${p.source_url&&/^https?:\/\//i.test(p.source_url)?`<p class="source-footer"><a href="${esc(p.source_url)}" target="_blank" rel="noopener noreferrer">원본 공고 확인 ↗</a></p>`:''}<p class="muted">담당자 연락처는 공개 업무용 정보이며, 실제 연락 전 출처 및 최신성을 확인하세요.</p>`;
+ $("modalBody").innerHTML=`<span class="eyebrow">BUILD SIGNAL · 프로젝트 상세</span><h2 class="project-detail-title">${esc(p.name)}</h2><p class="muted">${esc(p.source==='g2b_bid'?'나라장터 공고 기반 프로젝트':p.source==='demo'?'가상 데모 프로젝트':'프로젝트 정보')}</p><div class="detail-grid">${fields.map(([k,v])=>`<div class="detail-item"><small>${k}</small><b>${esc(v||"확인되지 않음")}</b></div>`).join("")}</div><div class="contact-section-title"><h3>참여 업체 및 담당자 연락처</h3><p>공개 출처에서 확인된 정보만 표시합니다.</p></div><div class="roles-grid">${contactHtml}</div>${evidenceHtml}${phaseHtml}<div class="pipeline"><button class="button ${p.favorite?"primary":"light"}" id="favBtn">${p.favorite?"★ 관심 해제":"☆ 관심 등록"}</button><label>영업 단계<select id="pipeStatus"><option value="NEW">신규</option><option value="CONTACTED">접촉</option><option value="MEETING">미팅</option><option value="PROPOSAL">제안</option><option value="WON">수주</option><option value="LOST">실패</option></select></label></div><label class="note-label">영업 메모<textarea id="pipeNote" rows="3">${esc(p.pipeline?.note||'')}</textarea></label><button class="button primary" id="savePipeline">영업정보 저장</button>${p.source_url&&/^https?:\/\//i.test(p.source_url)?`<p class="source-footer"><a href="${esc(p.source_url)}" target="_blank" rel="noopener noreferrer">원본 공고 확인 ↗</a></p>`:''}<p class="muted">담당자 연락처는 공개 업무용 정보이며, 실제 연락 전 출처 및 최신성을 확인하세요.</p>`;
  $("pipeStatus").value=p.pipeline?.status||"NEW";
  $("favBtn").onclick=async()=>{await api(`/api/projects/${id}/favorite`,{method:"POST"});detail(id);};
  $("savePipeline").onclick=async()=>{await api(`/api/projects/${id}/pipeline`,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({status:$("pipeStatus").value,note:$("pipeNote").value})});alert("영업정보를 저장했습니다.");};
@@ -105,7 +107,7 @@ window.groupDetail=async id=>{
  }catch(e){alert(e.message);}
 };
 
-function showPage(page){currentPage=page;document.querySelectorAll(".page").forEach(x=>x.classList.toggle("active",x.id===page));document.querySelectorAll("nav a").forEach(x=>x.classList.toggle("active",x.dataset.page===(page==="projects"?"groups":page)));$("pageTitle").textContent=({dashboard:"대시보드",groups:"건설 프로젝트 통합 검색",projects:"건설 프로젝트 통합 검색",recommend:"AI 영업 추천",favorites:"관심 현장"})[page]||"BUILD SIGNAL";if(page==="groups")groups(1);if(page==="projects")search(1);if(page==="recommend")recommendations();if(page==="favorites")favorites();if(page==="dashboard")dashboard();}
+function showPage(page){currentPage=page;document.querySelectorAll(".page").forEach(x=>x.classList.toggle("active",x.id===page));document.querySelectorAll("nav a").forEach(x=>x.classList.toggle("active",x.dataset.page===(page==="groups"?"projects":page)));$("pageTitle").textContent=({dashboard:"대시보드",groups:"건설 프로젝트 통합 검색",projects:"건설 프로젝트 통합 검색",recommend:"AI 영업 추천",favorites:"관심 현장"})[page]||"BUILD SIGNAL";if(page==="groups")groups(1);if(page==="projects")search(1);if(page==="recommend")recommendations();if(page==="favorites")favorites();if(page==="dashboard")dashboard();}
 document.querySelectorAll("[data-search-tab]").forEach(btn=>btn.addEventListener("click",()=>{history.replaceState(null,"","#"+btn.dataset.searchTab);showPage(btn.dataset.searchTab);}));
 document.querySelectorAll("[data-page],[data-go]").forEach(a=>a.addEventListener("click",e=>{e.preventDefault();const p=a.dataset.page||a.dataset.go;history.replaceState(null,"","#"+p);showPage(p);}));
 $('groupSearchBtn').onclick=()=>groups(1);
@@ -129,6 +131,7 @@ $("q").addEventListener("keydown",e=>{if(e.key==="Enter")search(1);});
     }
     await loadRegionChoices();
     showPage(location.hash.slice(1)||'dashboard');
+    const projectId=new URLSearchParams(location.search).get('projectId');if(projectId&&/^[1-9]\d*$/.test(projectId))detail(projectId);
   } catch(e) { location.replace('/login.html'); }
 })();
 
@@ -152,7 +155,7 @@ async function loadAutomaticFreshness(){
   const time=v=>v?new Date(v).toLocaleString('ko-KR',{timeZone:'Asia/Seoul'}):'아직 없음';
   const parts=[d.enabled?'서버 자동 갱신 활성':'서버 자동 갱신 중지'];
   for(const row of d.sources){
-   const label=row.source==='bids'?'나라장터 입찰':'국토부 인허가·착공·준공';
+   const label=row.source==='bids'?'나라장터 입찰':row.source==='early'?'심의 공개자료':'국토부 인허가·착공·준공';
    const running=row.lease_until&&new Date(row.lease_until)>new Date();
    parts.push(label+': '+(!d.configured[row.source]?'인증키 설정 필요':running?'수집 중':row.last_error?'재시도 대기':'예약 대기')+' / 마지막 처리 성공 '+time(row.last_success_at));
   }
@@ -163,3 +166,18 @@ async function loadAutomaticFreshness(){
 }
 loadAutomaticFreshness();
 setInterval(()=>{if(!document.hidden)loadAutomaticFreshness();},60000);
+
+function partyEvidenceHtml(rows){
+ const labels={owner:'건축주',developer:'사업시행자',applicant:'심의 신청인',designer:'설계사',contractor:'시공사',supervisor:'감리사',operator:'운영·관리사'};
+ const scopes={company:'회사 대표 연락처',department:'부서 연락처',project:'프로젝트 담당 연락처'};
+ return '<section><h3>단계별 참여업체 근거</h3><p>원문에 기재된 역할로 구분합니다. 자동 추출 자료는 원문 확인이 필요하며, 아래는 시점별 기록입니다.</p>'+(!rows.length?'<p>확보된 참여업체 근거가 없습니다.</p>':rows.map(e=>'<article class="contact-entry"><b>'+esc(labels[e.role]||e.role)+' · '+esc(e.organization)+'</b><p>'+esc(stageLabel[e.observed_stage])+' / '+esc(e.origin==='automatic'?'원문 자동 추출·미확인':'관리자 근거 등록')+' / 확인 '+esc(new Date(e.observed_at).toLocaleDateString('ko-KR',{timeZone:'Asia/Seoul'}))+'</p><p>'+esc(scopes[e.contact_scope])+' · '+esc(e.person_name||'담당자 미확인')+' · '+esc(e.phone||'전화 미확인')+' · '+esc(e.email||'이메일 미확인')+'</p><p>'+esc(e.excerpt)+'</p><a href="'+esc(e.source_url)+'" target="_blank" rel="noopener noreferrer">근거 원문</a></article>').join(''))+'</section>';
+}
+function phaseHistoryHtml(rows){
+ const events=[];
+ for(const p of rows){
+  if(p.stage==='REVIEW')events.push({date:p.source_updated_at,label:'심의 공개자료',id:p.id});
+  for(const [field,label] of [['permit_date','인허가'],['start_date','착공'],['completion_date','사용승인']])if(p[field])events.push({date:p[field],label,id:p.id});
+ }
+ events.sort((a,b)=>String(a.date||'').localeCompare(String(b.date||'')));
+ return '<section><h3>프로젝트 진행 이력</h3><p>서로 다른 출처의 현장은 같은 사업으로 확인해 연결한 경우에만 함께 표시합니다.</p>'+events.map(e=>'<p>'+esc(e.date?String(e.date).slice(0,10):'날짜 미확인')+' · '+esc(e.label)+' · 현장 #'+esc(e.id)+'</p>').join('')+'</section>';
+}

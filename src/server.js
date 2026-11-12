@@ -6,7 +6,8 @@ const crypto = require("crypto");
 const session = require("express-session");
 const PgSession = require("connect-pg-simple")(session);
 const bcrypt = require("bcryptjs");
-const { query, initDb } = require("./db");
+const { query, initDb, transaction } = require("./db");
+const { normalizeEvidence,insertEvidence,createEarlyCollector } = require("./early-projects");
 const { profiles, scoreProject } = require("./scoring");
 const { permitDate, permitLifecycle } = require("./archhub");
 const { createAutoIngest } = require("./auto-ingest");
@@ -26,8 +27,8 @@ app.use(session({
 }));
 app.use(express.static(path.join(__dirname, "..", "public")));
 
-const STAGES = ["PERMIT", "STARTED", "COMPLETED", "BID", "UNKNOWN"];
-const stageNames = { PERMIT: "인허가", STARTED: "착공", COMPLETED: "준공", BID: "입찰", UNKNOWN: "확인 필요" };
+const STAGES = ["REVIEW", "PERMIT", "STARTED", "COMPLETED", "BID", "UNKNOWN"];
+const stageNames = { REVIEW:"심의", PERMIT: "인허가", STARTED: "착공", COMPLETED: "준공", BID: "입찰", UNKNOWN: "확인 필요" };
 
 function requireAdmin(req, res, next) {
   const token = req.headers["x-ingest-token"];
@@ -963,16 +964,16 @@ app.get("/api/projects", async (req, res) => {
     const params = [], where = [];
     function add(v, sql) { where.push(sql.replace(/\?/g, () => { params.push(v); return `$${params.length}`; })); }
     const rawKeyword = String(q).trim().slice(0,120);
-    const keywordStage = ({인허가:"PERMIT",허가:"PERMIT",착공:"STARTED",준공:"COMPLETED",사용승인:"COMPLETED",입찰:"BID"})[rawKeyword];
+    const keywordStage = ({심의:"REVIEW",인허가:"PERMIT",허가:"PERMIT",착공:"STARTED",준공:"COMPLETED",사용승인:"COMPLETED",입찰:"BID"})[rawKeyword];
     const selectedStage = String(stage || keywordStage || "");
     if(selectedStage && !STAGES.includes(selectedStage))return res.status(400).json({error:"잘못된 진행 단계입니다."});
     const keyword = keywordStage ? "" : rawKeyword;
-    if (keyword) add(`%${keyword}%`, "(p.name ILIKE ? OR p.address ILIKE ? OR p.owner ILIKE ? OR p.designer ILIKE ? OR p.contractor ILIKE ? OR EXISTS (SELECT 1 FROM project_contacts pc WHERE pc.project_id=p.id AND (pc.organization ILIKE ? OR pc.person_name ILIKE ?)))");
+    if (keyword) add(`%${keyword}%`, "(EXISTS (SELECT 1 FROM project_party_evidence pe WHERE pe.project_id=p.id AND pe.organization ILIKE ?) OR p.name ILIKE ? OR p.address ILIKE ? OR p.owner ILIKE ? OR p.designer ILIKE ? OR p.contractor ILIKE ? OR EXISTS (SELECT 1 FROM project_contacts pc WHERE pc.project_id=p.id AND (pc.organization ILIKE ? OR pc.person_name ILIKE ?)))");
     if (region) {const names=regionAliases(String(region).slice(0,60));params.push(names.map(x=>`%${x}%`));where.push(`p.region ILIKE ANY($${params.length}::text[])`);}
     if (selectedStage) add(selectedStage, "p.stage = ?");
     if (type) add(`%${String(type).slice(0,80)}%`, "p.building_type ILIKE ?");
-    if (contact === 'any') where.push("EXISTS (SELECT 1 FROM project_contacts pc WHERE pc.project_id=p.id)");
-    if (['client','designer','supervisor','contractor'].includes(contact)) add(contact, "EXISTS (SELECT 1 FROM project_contacts pc WHERE pc.project_id=p.id AND pc.role=?)");
+    if (contact === 'any') where.push("(EXISTS (SELECT 1 FROM project_contacts pc WHERE pc.project_id=p.id) OR EXISTS(SELECT 1 FROM project_party_evidence pe WHERE pe.project_id=p.id))");
+    if (['client','designer','supervisor','contractor','owner','developer','applicant','operator'].includes(contact)) add(contact, "(EXISTS (SELECT 1 FROM project_contacts pc WHERE pc.project_id=p.id AND pc.role=?) OR EXISTS(SELECT 1 FROM project_party_evidence pe WHERE pe.project_id=p.id AND pe.role=?))");
     const dateColumn = dateField === "collected" ? "p.created_at::date" : "CASE WHEN p.stage = 'PERMIT' THEN p.permit_date WHEN p.stage = 'STARTED' THEN p.start_date WHEN p.stage = 'BID' THEN p.source_updated_at WHEN p.stage = 'COMPLETED' THEN p.completion_date ELSE COALESCE(p.permit_date,p.start_date,p.source_updated_at) END";
     for (const [value,op] of [[from,">="],[to,"<="]]) {
       if (!value) continue;
@@ -983,11 +984,14 @@ app.get("/api/projects", async (req, res) => {
     const clause = where.length ? `WHERE ${where.join(" AND ")}` : "";
     const count = await query(`SELECT COUNT(*)::int AS n FROM projects p ${clause}`, params);
     const rows = await query(`SELECT p.*,
+      (SELECT organization FROM project_party_evidence pe WHERE pe.project_id=p.id AND pe.role='owner' ORDER BY observed_at DESC,id DESC LIMIT 1) AS owner_evidence,
+      (SELECT organization FROM project_party_evidence pe WHERE pe.project_id=p.id AND pe.role='applicant' ORDER BY observed_at DESC,id DESC LIMIT 1) AS applicant_evidence,
+      (SELECT COUNT(*)::int FROM project_party_evidence pe WHERE pe.project_id=p.id) AS party_count,
       (SELECT COUNT(*)::int FROM project_contacts pc WHERE pc.project_id=p.id) AS contact_count,
       EXISTS(SELECT 1 FROM project_contacts pc WHERE pc.project_id=p.id AND pc.phone IS NOT NULL AND pc.phone<>'') AS has_phone,
       EXISTS(SELECT 1 FROM project_contacts pc WHERE pc.project_id=p.id AND pc.email IS NOT NULL AND pc.email<>'') AS has_email
       FROM projects p ${clause}
-      ORDER BY CASE WHEN $${params.length+1}::text <> '' AND p.name ILIKE $${params.length+2} THEN 0 ELSE 1 END,
+      ORDER BY CASE WHEN p.stage='REVIEW' THEN 0 ELSE 1 END, CASE WHEN $${params.length+1}::text <> '' AND p.name ILIKE $${params.length+2} THEN 0 ELSE 1 END,
         p.updated_at DESC LIMIT $${params.length+3} OFFSET $${params.length+4}`,
       [...params, keyword, `${keyword}%`, l, (p-1)*l]);
     let coverage=null;
@@ -1169,6 +1173,32 @@ app.post('/api/admin/project-groups/backfill',loadUser,requireAdminRole,async(re
  }catch(e){res.status(500).json({error:e.message});}
 });
 
+app.get('/api/admin/early-projects',loadUser,requireAdminRole,async(req,res)=>{
+ try{
+  const projects=await query(`SELECT p.id,p.name,p.address,p.source_updated_at,l.permit_id FROM projects p LEFT JOIN project_phase_links l ON l.early_id=p.id WHERE p.source='public_review' ORDER BY p.updated_at DESC LIMIT 50`);
+  const documents=await query('SELECT * FROM early_source_documents ORDER BY last_checked_at DESC NULLS LAST LIMIT 20');
+  res.json({projects:projects.rows,documents:documents.rows});
+ }catch{res.status(500).json({error:'초기 사업 수집 현황 조회 실패'});}
+});
+app.post('/api/admin/projects/:id/party-evidence',loadUser,requireAdminRole,async(req,res)=>{
+ try{
+  const id=Number(req.params.id);if(!Number.isSafeInteger(id)||id<1)return res.status(400).json({error:'유효한 현장 ID가 필요합니다.'});
+  let e;try{e=normalizeEvidence(req.body||{});}catch(err){return res.status(400).json({error:err.message});}
+  const p=await query('SELECT id FROM projects WHERE id=$1',[id]);if(!p.rowCount)return res.status(404).json({error:'현장 없음'});
+  const evidenceId=await insertEvidence(query,id,e,'admin:'+req.user.id);res.json({ok:true,id:evidenceId,duplicate:!evidenceId});
+ }catch{res.status(500).json({error:'참여업체 근거 저장 실패'});}
+});
+app.post('/api/admin/early-projects/link',loadUser,requireAdminRole,async(req,res)=>{
+ try{
+  const early=Number(req.body?.early_id),permit=Number(req.body?.permit_id),reason=String(req.body?.reason||'').trim();
+  if(!Number.isSafeInteger(early)||!Number.isSafeInteger(permit)||early<1||permit<1||early===permit||reason.length<10||reason.length>1000)return res.status(400).json({error:'심의/인허가 현장 ID와 같은 사업으로 판단한 근거(10~1000자)가 필요합니다.'});
+  const linked=await query(`INSERT INTO project_phase_links(early_id,permit_id,reason,reviewed_by)
+   SELECT a.id,b.id,$3,$4 FROM projects a,projects b WHERE a.id=$1 AND a.source='public_review' AND b.id=$2 AND b.source='arch_hub_permit'
+   ON CONFLICT(early_id) DO NOTHING RETURNING early_id`,[early,permit,reason,req.user.id]);
+  if(!linked.rowCount)return res.status(409).json({error:'출처 유형이 다르거나 이미 연결되었습니다. 원문과 기존 연결을 확인하세요.'});
+  res.json({ok:true});
+ }catch{res.status(500).json({error:'프로젝트 단계 연결 실패'});}
+});
 app.get("/api/projects/:id", async (req, res) => {
   try {
     const r = await query("SELECT * FROM projects WHERE id=$1", [req.params.id]);
@@ -1177,7 +1207,13 @@ app.get("/api/projects/:id", async (req, res) => {
     const s = await query("SELECT status,note FROM sales_pipeline WHERE project_id=$1 AND user_key=$2", [req.params.id, String(req.user.id)]);
     const contacts = await query(`SELECT role,organization,department,person_name,phone,email,source,source_url,verified_at,updated_at
       FROM project_contacts WHERE project_id=$1 ORDER BY CASE role WHEN 'client' THEN 1 WHEN 'designer' THEN 2 WHEN 'supervisor' THEN 3 ELSE 4 END, updated_at DESC`,[req.params.id]);
-    res.json({ ...r.rows[0], contacts: contacts.rows, favorite: !!f.rowCount, pipeline: s.rows[0] || { status: "NEW", note: "" } });
+    const master=await query('SELECT permit_id FROM project_phase_links WHERE early_id=$1',[req.params.id]);
+    const masterId=master.rows[0]?.permit_id||req.params.id;
+    const related=await query('SELECT early_id FROM project_phase_links WHERE permit_id=$1',[masterId]);
+    const ids=[...new Set([String(masterId),String(req.params.id),...related.rows.map(x=>String(x.early_id))])];
+    const evidence=await query('SELECT * FROM project_party_evidence WHERE project_id=ANY($1::bigint[]) ORDER BY observed_at DESC,id DESC LIMIT 100',[ids]);
+    const phases=await query('SELECT id,name,stage,permit_date,start_date,completion_date,source_updated_at,source_url FROM projects WHERE id=ANY($1::bigint[]) ORDER BY source_updated_at NULLS LAST,id',[ids]);
+    res.json({ ...r.rows[0], contacts: contacts.rows,partyEvidence:evidence.rows,phaseProjects:phases.rows,masterProjectId:masterId,favorite: !!f.rowCount, pipeline: s.rows[0] || { status: "NEW", note: "" } });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -1781,6 +1817,7 @@ app.post("/api/admin/demo-seed", requireAdmin, async (req,res) => {
 });
 
 app.get("/login", (req,res)=>res.sendFile(path.join(__dirname,"..","public","login.html")));
+const earlyCollector=createEarlyCollector({query,transaction});
 const automaticIngest=createAutoIngest({query,
  busy:source=>source==='bids'?g2bJob?.status==='running':permitJob?.status==='running',
  permit:async opts=>{
@@ -1801,7 +1838,7 @@ app.get('/api/ingestion/freshness',async(req,res)=>{
    COUNT(*) FILTER (WHERE enabled AND last_cycle_at IS NOT NULL)::int AS completed_regions,
    MIN(last_cycle_at) FILTER (WHERE enabled) AS oldest_cycle,
    COUNT(*) FILTER (WHERE enabled AND last_error IS NOT NULL)::int AS failed_regions FROM auto_permit_regions`);
-  res.json({enabled:automaticIngest.enabled(),configured:{permits:!!process.env.ARCH_HUB_SERVICE_KEY,bids:!!process.env.G2B_SERVICE_KEY},sources:states.rows,coverage:coverage.rows[0],catalogDate:regionCatalogMeta.retrievedOn,
+  res.json({enabled:automaticIngest.enabled(),configured:{permits:!!process.env.ARCH_HUB_SERVICE_KEY,bids:!!process.env.G2B_SERVICE_KEY,early:true},sources:states.rows,coverage:coverage.rows[0],catalogDate:regionCatalogMeta.retrievedOn,
    note:'국토부는 내장된 전국 공식 지역코드로 순회 적재합니다. 지역 선택은 저장된 자료를 필터링하며, 지역별 수집 완료를 의미하지 않습니다. 처리량과 원천 반영 주기에 따라 지연될 수 있습니다.'});
  }catch{res.status(500).json({error:'자동 수집 현황 조회 실패'});}
 });
@@ -1816,6 +1853,6 @@ async function start() {
       ON CONFLICT(email) DO UPDATE SET password_hash=EXCLUDED.password_hash,role='admin',status='approved'`,[email,hash]);
   }
   const port = process.env.PORT || 10000;
-  app.listen(port, () => {console.log(`BUILD SIGNAL listening on ${port}`);automaticIngest.start();});
+  app.listen(port, () => {console.log(`BUILD SIGNAL listening on ${port}`);automaticIngest.start();earlyCollector.start();});
 }
 start().catch(e => { console.error("Startup failed:", e); process.exit(1); });

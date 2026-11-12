@@ -38,7 +38,7 @@ async function initDb() {
       last_attempt_at TIMESTAMPTZ,last_success_at TIMESTAMPTZ,last_error TEXT,
       lease_token TEXT,lease_until TIMESTAMPTZ,call_day DATE,daily_calls INTEGER NOT NULL DEFAULT 0
     );
-    INSERT INTO auto_ingest_state(source) VALUES('permits'),('bids') ON CONFLICT DO NOTHING;
+    INSERT INTO auto_ingest_state(source) VALUES('permits'),('bids'),('early') ON CONFLICT DO NOTHING;
     CREATE TABLE IF NOT EXISTS auto_permit_regions (
       sigungu_cd CHAR(5) NOT NULL,bjdong_cd CHAR(5) NOT NULL,label TEXT NOT NULL DEFAULT '',
       enabled BOOLEAN NOT NULL DEFAULT TRUE,next_page INTEGER NOT NULL DEFAULT 1 CHECK(next_page>0),
@@ -119,6 +119,25 @@ async function initDb() {
     CREATE INDEX IF NOT EXISTS idx_projects_region ON projects(region, district);
     CREATE INDEX IF NOT EXISTS idx_projects_stage ON projects(stage);
     CREATE INDEX IF NOT EXISTS idx_projects_updated ON projects(updated_at DESC);
+    CREATE TABLE IF NOT EXISTS early_source_documents (
+      url TEXT PRIMARY KEY,title TEXT NOT NULL,content_hash TEXT,record_count INTEGER NOT NULL DEFAULT 0,
+      last_checked_at TIMESTAMPTZ,last_error TEXT
+    );
+    CREATE TABLE IF NOT EXISTS project_party_evidence (
+      id BIGSERIAL PRIMARY KEY,project_id BIGINT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      role TEXT NOT NULL CHECK(role IN ('owner','developer','applicant','designer','contractor','supervisor','operator')),
+      organization TEXT NOT NULL,person_name TEXT,department TEXT,phone TEXT,email TEXT,
+      contact_scope TEXT NOT NULL CHECK(contact_scope IN ('company','department','project')),
+      observed_stage TEXT NOT NULL CHECK(observed_stage IN ('REVIEW','PERMIT','STARTED','COMPLETED')),
+      source_url TEXT NOT NULL,excerpt TEXT NOT NULL DEFAULT '',fingerprint TEXT NOT NULL UNIQUE,
+      origin TEXT NOT NULL,observed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_party_evidence_project ON project_party_evidence(project_id,observed_at DESC);
+    CREATE TABLE IF NOT EXISTS project_phase_links (
+      early_id BIGINT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+      permit_id BIGINT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      reason TEXT NOT NULL,reviewed_by BIGINT NOT NULL REFERENCES users(id),created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),CHECK(early_id<>permit_id)
+    );
     CREATE TABLE IF NOT EXISTS favorites (
       id BIGSERIAL PRIMARY KEY,
       project_id BIGINT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -228,4 +247,10 @@ async function initDb() {
   `);
 }
 
-module.exports = { query, initDb };
+async function transaction(work){
+ const client=await getPool().connect();
+ try{await client.query('BEGIN');const result=await work((sql,args=[])=>client.query(sql,args));await client.query('COMMIT');return result;}
+ catch(e){await client.query('ROLLBACK');throw e;}
+ finally{client.release();}
+}
+module.exports = { query, initDb, transaction };
