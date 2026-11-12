@@ -1140,7 +1140,7 @@ app.get('/api/permits/followups',loadUser,async(req,res)=>{
   const offset=Math.max(0,Math.min(100000,Number.parseInt(req.query.offset,10)||0));
   const status=String(req.query.when||'all');
   if(!['all','overdue','today','upcoming'].includes(status))return res.status(400).json({error:'잘못된 일정 필터'});
-  const filters={all:'',overdue:' AND sp.next_contact_date<(NOW() AT TIME ZONE 'Asia/Seoul')::date',today:' AND sp.next_contact_date=(NOW() AT TIME ZONE 'Asia/Seoul')::date',upcoming:' AND sp.next_contact_date>(NOW() AT TIME ZONE 'Asia/Seoul')::date'};
+  const filters={all:'',overdue:" AND sp.next_contact_date<(NOW() AT TIME ZONE 'Asia/Seoul')::date",today:" AND sp.next_contact_date=(NOW() AT TIME ZONE 'Asia/Seoul')::date",upcoming:" AND sp.next_contact_date>(NOW() AT TIME ZONE 'Asia/Seoul')::date"};
   const base="FROM sales_pipeline sp JOIN projects p ON p.id=sp.project_id WHERE sp.user_key=$1 AND p.source='arch_hub_permit' AND sp.next_contact_date IS NOT NULL AND sp.status NOT IN ('WON','LOST')";
   const totals=await query(`SELECT COUNT(*)::int AS total,
    COUNT(*) FILTER (WHERE sp.next_contact_date<(NOW() AT TIME ZONE 'Asia/Seoul')::date)::int AS overdue,
