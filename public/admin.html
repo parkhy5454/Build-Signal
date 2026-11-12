@@ -610,17 +610,37 @@ document.getElementById('permitRegionalLeadsCsv').addEventListener('click',()=>{
  const url=URL.createObjectURL(blob),a=document.createElement('a');
  a.href=url;a.download='build-signal-regional-leads.csv';document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
 });
+let permitRegionalQueryVersion=0;
+function clearPermitRegionalLeadResults(){
+ permitRegionalCsvRows=null;
+ document.getElementById('permitRegionalLeadsCsv').disabled=true;
+ document.getElementById('permitRegionalBulkCandidates').replaceChildren();
+ const select=document.getElementById('permitRegionalLeadSelect');select.replaceChildren();
+ const option=document.createElement('option');option.value='';option.textContent='먼저 지역별 영업 후보 조회';select.appendChild(option);
+ document.getElementById('permitRegionalBulkOutput').textContent='';
+ document.getElementById('permitRegionalLeadChooseOutput').textContent='';
+ updatePermitRegionalBulkSelection();
+}
+for(const id of ['permitRegionalLeadRegion','permitLeadProfile','permitRegionalLeadStage','permitRegionalLeadDays','permitRegionalLeadRegistration']){
+ document.getElementById(id).addEventListener('change',()=>{
+  permitRegionalQueryVersion++;
+  clearPermitRegionalLeadResults();
+  document.getElementById('permitRegionalLeadsOutput').textContent='조회 조건이 변경됐습니다. 다시 조회하세요.';
+ });
+}
 document.getElementById('permitRegionalLeadsLoad').addEventListener('click',async()=>{
+ const version=++permitRegionalQueryVersion;
+ clearPermitRegionalLeadResults();
  const region=document.getElementById('permitRegionalLeadRegion').value;
  const out=document.getElementById('permitRegionalLeadsOutput');
  if(!region){out.textContent='먼저 지역별 신규 현장 분석을 실행하고 지역을 선택하세요.';return;}
  out.textContent='선택 지역 영업 우선순위 조회 중...';
- permitRegionalCsvRows=null;document.getElementById('permitRegionalLeadsCsv').disabled=true;
  try{
   const profile=document.getElementById('permitLeadProfile').value;
   const stage=document.getElementById('permitRegionalLeadStage').value,days=document.getElementById('permitRegionalLeadDays').value,registration=document.getElementById('permitRegionalLeadRegistration').value;
   const r=await fetch('/api/admin/permits/regional-leads?region='+encodeURIComponent(region)+'&profile='+encodeURIComponent(profile)+'&stage='+encodeURIComponent(stage)+'&days='+encodeURIComponent(days)+'&registration='+encodeURIComponent(registration)+'&limit=30');
-  const d=await r.json();if(!r.ok)throw Error(d.error||'조회 실패');
+  const d=await r.json();if(version!==permitRegionalQueryVersion)return;
+  if(!r.ok)throw Error(d.error||'조회 실패');
   permitRegionalCsvRows=d;document.getElementById('permitRegionalLeadsCsv').disabled=!d.rows.length;
   const bulk=document.getElementById('permitRegionalBulkCandidates');bulk.replaceChildren();
   for(const x of d.rows){
@@ -639,7 +659,7 @@ document.getElementById('permitRegionalLeadsLoad').addEventListener('click',asyn
   for(const x of d.rows)lines.push('현장 #'+x.id+' / 점수 '+x.score+' / '+x.name+' / '+(x.address||'주소 없음')+' / '+(x.stage||'단계 미확인')+' / '+(x.pipelineStatus?'영업 등록됨 ('+x.pipelineStatus+')':'영업 미등록')+' / '+x.reasons.join(', '));
   if(!d.rows.length)lines.push('조회된 현장이 없습니다.');
   lines.push('',d.note);out.textContent=lines.join('\n');
- }catch(e){out.textContent=e.message;}
+ }catch(e){if(version===permitRegionalQueryVersion){clearPermitRegionalLeadResults();out.textContent=e.message;}}
 });
 document.getElementById('permitIngestionSummaryLoad').addEventListener('click',async()=>{
  const out=document.getElementById('permitIngestionSummaryOutput'),days=document.getElementById('permitIngestionSummaryDays').value;
