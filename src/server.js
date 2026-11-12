@@ -403,6 +403,17 @@ async function savePermitJob(job){
 }
 
 const permitDate=v=>{const x=String(v||'');if(!/^\d{8}$/.test(x))return null;const iso=`${x.slice(0,4)}-${x.slice(4,6)}-${x.slice(6,8)}`;const d=new Date(iso+'T00:00:00Z');return Number.isFinite(d.getTime())&&d.toISOString().slice(0,10)===iso?iso:null;};
+
+function classifyPermitApiError(message){
+ const m=String(message||'').toLowerCase();
+ if(/api 오류 코드\s*(?:07|30)|입력범위값 초과|invalid.*range/.test(m))return {code:'REQUEST_RANGE',label:'요청 범위 오류',action:'수집 날짜 범위와 지역 코드를 확인하고 요청을 줄여 다시 시도하세요.'};
+ if(/http\s*(?:401|403)|api 오류 코드\s*(?:01|02|03|04|05)|인증|servicekey|access denied|forbidden/.test(m))return {code:'AUTH',label:'인증·접근 권한 오류',action:'공공데이터포털 API 활용 승인 상태와 Render 인증키 설정을 확인하세요.'};
+ if(/http\s*429|rate limit|too many requests|quota|초과 요청/.test(m))return {code:'RATE_LIMIT',label:'요청 제한',action:'요청 빈도를 줄이고 잠시 후 재시도하세요.'};
+ if(/http\s*5\d\d|fetch failed|timeout|timed out|aborted|econnreset|enotfound/.test(m))return {code:'NETWORK',label:'서버·통신 오류',action:'일시적인 오류일 수 있습니다. API 상태를 확인하고 다시 시도하세요.'};
+ if(/json 응답이 아닙니다|unexpected token|응답 항목/.test(m))return {code:'RESPONSE_FORMAT',label:'응답 형식 오류',action:'API가 JSON 대신 XML이나 오류 본문을 반환했는지 확인하세요.'};
+ return {code:'UNKNOWN',label:'기타 수집 오류',action:'실패 메시지와 지역 코드를 확인하세요.'};
+}
+
 async function permitSync(job,opts){
  try{
   const key=process.env.ARCH_HUB_SERVICE_KEY;
@@ -576,7 +587,7 @@ app.post('/api/admin/permits/region-queues/:id/run-next',loadUser,requireAdminRo
    if(!advanced.rows.length)throw Error('완료 위치 저장 충돌');
    job.status='completed';
   }catch(e){
-   job.status='failed';job.error=String(e.message).slice(0,500);
+   job.status='failed';job.error=String(e.message).slice(0,500);job.errorCategory=classifyPermitApiError(job.error);
    await query("UPDATE permit_region_queues SET status='failed',last_error=$4,failed_region=$5,failed_at=NOW(),run_token=NULL,updated_at=NOW() WHERE id=$1 AND next_batch=$2 AND status='running' AND run_token=$3",[queue.id,queue.next_batch,runToken,job.error,typeof currentRegion==='object'&&currentRegion?String(currentRegion.name||currentRegion.sigunguCd+'-'+currentRegion.bjdongCd).slice(0,200):null]).catch(()=>{});
   }finally{clearInterval(heartbeat);job.finishedAt=new Date().toISOString();await savePermitJob(job).catch(()=>{});}
  })();
