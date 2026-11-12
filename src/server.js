@@ -449,7 +449,7 @@ app.get('/api/project-groups', async(req,res)=>{
 });
 app.get('/api/project-groups/:id',async(req,res)=>{
  try{
-  if(!/^\\d+$/.test(req.params.id))return res.status(400).json({error:'잘못된 프로젝트 번호'});
+  if(!/^\d+$/.test(req.params.id))return res.status(400).json({error:'잘못된 프로젝트 번호'});
   const g=await query('SELECT * FROM project_groups WHERE id=$1',[req.params.id]);
   if(!g.rowCount)return res.status(404).json({error:'프로젝트를 찾을 수 없습니다.'});
   const notices=await query(`SELECT p.id,p.name AS notice_title,p.building_type,p.stage,p.estimated_cost,p.source_url,p.owner,p.address,
