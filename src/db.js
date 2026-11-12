@@ -133,6 +133,26 @@ async function initDb() {
       origin TEXT NOT NULL,observed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
     CREATE INDEX IF NOT EXISTS idx_party_evidence_project ON project_party_evidence(project_id,observed_at DESC);
+    ALTER TABLE project_party_evidence ADD COLUMN IF NOT EXISTS organization_address TEXT;
+    ALTER TABLE project_party_evidence ADD COLUMN IF NOT EXISTS registration_no TEXT;
+    CREATE TABLE IF NOT EXISTS organization_directory (
+      id BIGSERIAL PRIMARY KEY,source TEXT NOT NULL,organization TEXT NOT NULL,name_key TEXT NOT NULL,
+      address TEXT NOT NULL,address_key TEXT NOT NULL,registration_no TEXT,representative TEXT,phone TEXT,data_date TEXT,
+      source_url TEXT NOT NULL,fingerprint TEXT NOT NULL UNIQUE,is_current BOOLEAN NOT NULL DEFAULT FALSE,
+      fetched_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_directory_name ON organization_directory(name_key) WHERE is_current=TRUE;
+    CREATE TABLE IF NOT EXISTS directory_sync_state (
+      source TEXT PRIMARY KEY,next_due_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),last_attempt_at TIMESTAMPTZ,last_success_at TIMESTAMPTZ,
+      lease_token TEXT,lease_until TIMESTAMPTZ,last_error TEXT,record_count INTEGER NOT NULL DEFAULT 0
+    );
+    INSERT INTO directory_sync_state(source) VALUES('architects'),('busan_developers') ON CONFLICT DO NOTHING;
+    CREATE TABLE IF NOT EXISTS party_contact_decisions (
+      id BIGSERIAL PRIMARY KEY,evidence_id BIGINT NOT NULL REFERENCES project_party_evidence(id) ON DELETE CASCADE,
+      directory_id BIGINT NOT NULL REFERENCES organization_directory(id),decision TEXT NOT NULL CHECK(decision IN ('confirmed','rejected')),
+      reason TEXT NOT NULL,reviewed_by BIGINT NOT NULL REFERENCES users(id),created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_party_contact_decisions ON party_contact_decisions(evidence_id,directory_id,id DESC);
     CREATE TABLE IF NOT EXISTS project_phase_links (
       early_id BIGINT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
       permit_id BIGINT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,

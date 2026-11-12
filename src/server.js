@@ -8,6 +8,7 @@ const PgSession = require("connect-pg-simple")(session);
 const bcrypt = require("bcryptjs");
 const { query, initDb, transaction } = require("./db");
 const { normalizeEvidence,insertEvidence,createEarlyCollector } = require("./early-projects");
+const { createDirectorySync,directoryMatches,SOURCES:directorySources } = require("./organization-directory");
 const { profiles, scoreProject } = require("./scoring");
 const { permitDate, permitLifecycle } = require("./archhub");
 const { createAutoIngest } = require("./auto-ingest");
@@ -1173,6 +1174,23 @@ app.post('/api/admin/project-groups/backfill',loadUser,requireAdminRole,async(re
  }catch(e){res.status(500).json({error:e.message});}
 });
 
+app.get('/api/admin/organization-directory',loadUser,requireAdminRole,async(req,res)=>{
+ try{
+  const states=await query('SELECT source,last_attempt_at,last_success_at,next_due_at,last_error,record_count FROM directory_sync_state ORDER BY source');
+  const name=String(req.query.q||'').trim();let rows=[];
+  if(name.length>=2){const r=await query('SELECT id,source,organization,address,registration_no,phone,data_date,source_url FROM organization_directory WHERE is_current=TRUE AND organization ILIKE $1 ORDER BY organization,address LIMIT 30',['%'+name.slice(0,100)+'%']);rows=r.rows;}
+  res.json({sources:directorySources,states:states.rows,rows,architectMode:process.env.ARCHITECT_DIRECTORY_KEY?'api':'public_download',developerConfigured:!!process.env.DEVELOPER_DIRECTORY_KEY});
+ }catch{res.status(500).json({error:'업체 명부 상태 조회 실패'});}
+});
+app.post('/api/admin/party-contact-decisions',loadUser,requireAdminRole,async(req,res)=>{
+ try{
+  const evidenceId=Number(req.body?.evidence_id),directoryId=Number(req.body?.directory_id),decision=String(req.body?.decision||''),reason=String(req.body?.reason||'').trim();
+  if(!Number.isSafeInteger(evidenceId)||evidenceId<1||!Number.isSafeInteger(directoryId)||directoryId<1||!['confirmed','rejected'].includes(decision)||reason.length<10||reason.length>1000)return res.status(400).json({error:'업체 근거 ID·명부 ID·확인/제외 구분과 판단 근거(10자 이상)가 필요합니다.'});
+  const r=await query(`INSERT INTO party_contact_decisions(evidence_id,directory_id,decision,reason,reviewed_by)
+   SELECT e.id,d.id,$3,$4,$5 FROM project_party_evidence e,organization_directory d WHERE e.id=$1 AND d.id=$2 RETURNING id`,[evidenceId,directoryId,decision,reason,req.user.id]);
+  if(!r.rowCount)return res.status(404).json({error:'해당 참여업체 근거 또는 업체 명부 기록이 없습니다.'});res.json({ok:true,id:r.rows[0].id});
+ }catch{res.status(500).json({error:'업체 연락처 확인 기록 저장 실패'});}
+});
 app.get('/api/admin/early-projects',loadUser,requireAdminRole,async(req,res)=>{
  try{
   const projects=await query(`SELECT p.id,p.name,p.address,p.source_updated_at,l.permit_id FROM projects p LEFT JOIN project_phase_links l ON l.early_id=p.id WHERE p.source='public_review' ORDER BY p.updated_at DESC LIMIT 50`);
@@ -1213,7 +1231,8 @@ app.get("/api/projects/:id", async (req, res) => {
     const ids=[...new Set([String(masterId),String(req.params.id),...related.rows.map(x=>String(x.early_id))])];
     const evidence=await query('SELECT * FROM project_party_evidence WHERE project_id=ANY($1::bigint[]) ORDER BY observed_at DESC,id DESC LIMIT 100',[ids]);
     const phases=await query('SELECT id,name,stage,permit_date,start_date,completion_date,source_updated_at,source_url FROM projects WHERE id=ANY($1::bigint[]) ORDER BY source_updated_at NULLS LAST,id',[ids]);
-    res.json({ ...r.rows[0], contacts: contacts.rows,partyEvidence:evidence.rows,phaseProjects:phases.rows,masterProjectId:masterId,favorite: !!f.rowCount, pipeline: s.rows[0] || { status: "NEW", note: "" } });
+    const directory=await directoryMatches(query,evidence.rows);
+    res.json({ ...r.rows[0], contacts: contacts.rows,partyEvidence:evidence.rows,companyDirectory:directory,phaseProjects:phases.rows,masterProjectId:masterId,favorite: !!f.rowCount, pipeline: s.rows[0] || { status: "NEW", note: "" } });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -1818,6 +1837,7 @@ app.post("/api/admin/demo-seed", requireAdmin, async (req,res) => {
 
 app.get("/login", (req,res)=>res.sendFile(path.join(__dirname,"..","public","login.html")));
 const earlyCollector=createEarlyCollector({query,transaction});
+const directorySync=createDirectorySync({query,transaction});
 const automaticIngest=createAutoIngest({query,
  busy:source=>source==='bids'?g2bJob?.status==='running':permitJob?.status==='running',
  permit:async opts=>{
@@ -1853,6 +1873,6 @@ async function start() {
       ON CONFLICT(email) DO UPDATE SET password_hash=EXCLUDED.password_hash,role='admin',status='approved'`,[email,hash]);
   }
   const port = process.env.PORT || 10000;
-  app.listen(port, () => {console.log(`BUILD SIGNAL listening on ${port}`);automaticIngest.start();earlyCollector.start();});
+  app.listen(port, () => {console.log(`BUILD SIGNAL listening on ${port}`);automaticIngest.start();earlyCollector.start();directorySync.start();});
 }
 start().catch(e => { console.error("Startup failed:", e); process.exit(1); });
