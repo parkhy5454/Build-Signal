@@ -164,57 +164,62 @@ app.get("/api/health", async (req, res) => {
   catch (e) { res.status(503).json({ ok: false, error: e.message }); }
 });
 
-// 나라장터 공사 입찰공고 수집: 관리자만 실행 가능. 조회기간은 최신 API 정책에 맞춰 최대 7일로 제한.
-app.post("/api/admin/g2b/sync", loadUser, requireAdminRole, async (req, res) => {
-  const serviceKey = process.env.G2B_SERVICE_KEY;
-  if (!serviceKey) return res.status(400).json({ error: "Render 환경변수 G2B_SERVICE_KEY가 설정되지 않았습니다." });
-  // 진단 단계: 날짜 범위 초과(07)를 분리 확인하기 위해 KST 기준 최근 1시간만 조회.
-  // 성공하면 일 단위 분할 수집으로 확장할 수 있습니다.
-  const end = new Date();
-  const start = new Date(end.getTime() - 60 * 60 * 1000);
-  const fmt = d => {
-    const parts = new Intl.DateTimeFormat('en-US', {
-      timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit',
-      hour: '2-digit', minute: '2-digit', hourCycle: 'h23'
-    }).formatToParts(d);
-    const v = Object.fromEntries(parts.map(p => [p.type, p.value]));
-    return `${v.year}${v.month}${v.day}${v.hour}${v.minute}`;
-  };
+// 7일 전체 수집은 Render HTTP 응답 제한을 피하도록 백그라운드에서 진행합니다.
+// 단일 프로세스 실행 기준이며 서버 재시작 시 작업은 중단됩니다.
+let g2bJob = null;
+const g2bFormatKst = d => {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hourCycle: 'h23'
+  }).formatToParts(d);
+  const v = Object.fromEntries(parts.map(p => [p.type, p.value]));
+  return `${v.year}${v.month}${v.day}${v.hour}${v.minute}`;
+};
+const g2bPause = ms => new Promise(resolve => setTimeout(resolve, ms));
+async function g2bFetchPage(start, end, page) {
   const params = new URLSearchParams({
-    serviceKey,
-    pageNo: "1",
-    numOfRows: "100",
-    inqryDiv: "1",
-    inqryBgnDt: fmt(start),
-    inqryEndDt: fmt(end),
-    type: "json"
+    serviceKey: process.env.G2B_SERVICE_KEY,
+    pageNo: String(page), numOfRows: '100', inqryDiv: '1',
+    inqryBgnDt: g2bFormatKst(start), inqryEndDt: g2bFormatKst(end), type: 'json'
   });
-  const endpoint = "https://apis.data.go.kr/1230000/ad/BidPublicInfoService02/getBidPblancListInfoCnstwk02";
+  const endpoint = 'https://apis.data.go.kr/1230000/ad/BidPublicInfoService02/getBidPblancListInfoCnstwk02';
+  const response = await fetch(`${endpoint}?${params}`, {
+    headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(30000)
+  });
+  const raw = await response.text();
+  if (!response.ok) throw new Error(`나라장터 HTTP ${response.status}: ${raw.replace(/<[^>]*>/g, ' ').slice(0, 180)}`);
+  let payload;
+  try { payload = JSON.parse(raw); } catch { throw new Error('나라장터 JSON 응답을 읽지 못했습니다.'); }
+  const diagnostic = getG2bResponseDiagnostics(payload);
+  if (diagnostic.responseError) throw new Error(`나라장터 API 오류: ${diagnostic.responseError}`);
+  const items = parseG2bItems(payload);
+  const total = Number(diagnostic.totalCount);
+  if (Number.isFinite(total) && total > 0 && items.length === 0) throw new Error(`공고 ${total}건의 항목 구조를 읽지 못했습니다.`);
+  return { items, total: Number.isFinite(total) ? total : null };
+}
+async function g2bRunJob(job) {
   try {
-    const response = await fetch(`${endpoint}?${params.toString()}`, { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(25000) });
-    const rawText = await response.text();
-    if (!response.ok) {
-      // 응답 본문에 인증키가 포함될 가능성은 없지만, 오류 진단용으로 짧게만 표시합니다.
-      const detail = rawText.replace(/<[^>]*>/g, " ").replace(/\\s+/g, " ").trim().slice(0, 240);
-      throw new Error(`나라장터 HTTP 오류: ${response.status}${detail ? ` — ${detail}` : ""}`);
-    }
-    let payload;
-    try { payload = JSON.parse(rawText); }
-    catch { throw new Error(`나라장터 응답을 JSON으로 해석하지 못했습니다. 응답 앞부분: ${rawText.slice(0,180)}`); }
-    const items = parseG2bItems(payload);
-    const diagnostics = getG2bResponseDiagnostics(payload);
-    if (items.length === 0) {
-      const total = diagnostics.totalCount;
-      const hint = diagnostics.responseError
-        ? `나라장터 API 오류 응답: ${diagnostics.responseError}`
-        : total !== null && Number(total) > 0
-          ? `API는 총 ${total}건을 반환했지만 항목 배열을 읽지 못했습니다. 응답 구조를 확인해야 합니다.`
-          : `API 응답에서 공고 항목이 확인되지 않았습니다. resultCode=${diagnostics.resultCode ?? "없음"}, totalCount=${total ?? "없음"}, rootKeys=${diagnostics.rootKeys.join(",")}, bodyKeys=${diagnostics.bodyKeys.join(",")}`;
-      await query("INSERT INTO ingest_logs(source,received_count,inserted_count,status,message) VALUES($1,0,0,'ERROR',$2)",
-        ["g2b_bid", hint.slice(0,1000)]);
-      return res.status(502).json({ error: hint, diagnostics, range: { from: fmt(start), to: fmt(end) } });
-    }
-    let inserted = 0, updated = 0, skipped = 0;
+    // 성공 확인된 1시간 조회 범위로 고정. 마지막 1시간은 분 경계에서 겹치지 않도록 처리.
+    const end = new Date(job.endedAt);
+    const beginning = new Date(end.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const windowMs = 60 * 60 * 1000;
+    job.totalWindows = Math.ceil((end - beginning) / windowMs);
+    for (let i = 0; i < job.totalWindows; i++) {
+      const from = new Date(beginning.getTime() + i * windowMs);
+      const to = new Date(Math.min(from.getTime() + windowMs - 60000, end.getTime()));
+      let page = 1;
+      try {
+        while (true) {
+          // 과도한 페이지 반복을 방지하고, 누락 가능성은 오류로 보고합니다.
+          if (page > 100) throw new Error('한 시간 구간에서 100페이지를 초과했습니다.');
+          let result;
+          for (let attempt = 0; attempt < 3; attempt++) {
+            try { result = await g2bFetchPage(from, to, page); break; }
+            catch (e) { if (attempt === 2) throw e; await g2bPause(1500 * (attempt + 1)); }
+          }
+          const { items, total } = result;
+          job.received += items.length;
+          let inserted = 0, updated = 0, skipped = 0;
     for (const item of items) {
       const bidNo = firstValue(item, ["bidNtceNo","BIDNTCENO"]);
       const bidOrd = firstValue(item, ["bidNtceOrd","BIDNTCEORD"]) || "00";
@@ -239,13 +244,43 @@ app.post("/api/admin/g2b/sync", loadUser, requireAdminRole, async (req, res) => 
         RETURNING (xmax = 0) AS inserted`, vals);
       if (r.rows[0]?.inserted) inserted++; else updated++;
     }
-    await query("INSERT INTO ingest_logs(source,received_count,inserted_count,status,message) VALUES($1,$2,$3,'SUCCESS',$4)",
-      ["g2b_bid", items.length, inserted, `Updated ${updated}; skipped ${skipped}; range ${fmt(start)}-${fmt(end)}`]);
-    res.json({ ok: true, received: items.length, inserted, updated, skipped, range: { from: fmt(start), to: fmt(end) }, note: "오류 07 진단을 위해 최근 1시간만 조회했습니다. 정상 확인 후 7일 분할 수집을 구현합니다." });
+
+          job.inserted += inserted;
+          job.updated += updated;
+          job.skipped += skipped;
+          job.pages++;
+          job.current = `${g2bFormatKst(from)} ~ ${g2bFormatKst(to)} (${page}페이지)`;
+          if (!items.length || items.length < 100 || (total !== null && page * 100 >= total)) break;
+          page++;
+          await g2bPause(150);
+        }
+      } catch (e) {
+        job.errors.push(`${g2bFormatKst(from)}~${g2bFormatKst(to)}: ${e.message}`.slice(0, 300));
+      }
+      job.completedWindows++;
+      await g2bPause(120);
+    }
+    job.status = job.errors.length ? 'partial' : 'completed';
+    await query("INSERT INTO ingest_logs(source,received_count,inserted_count,status,message) VALUES($1,$2,$3,$4,$5)",
+      ['g2b_bid', job.received, job.inserted, job.errors.length ? 'ERROR' : 'SUCCESS',
+       `7day sync: updated=${job.updated}, skipped=${job.skipped}, failed_windows=${job.errors.length}`]);
   } catch (e) {
-    await query("INSERT INTO ingest_logs(source,received_count,inserted_count,status,message) VALUES($1,0,0,'ERROR',$2)", ["g2b_bid", String(e.message).slice(0,1000)]).catch(()=>{});
-    res.status(502).json({ error: e.message });
-  }
+    job.status = 'failed'; job.errors.push(String(e.message));
+  } finally { job.finishedAt = new Date().toISOString(); }
+}
+app.post('/api/admin/g2b/sync', loadUser, requireAdminRole, (req, res) => {
+  if (!process.env.G2B_SERVICE_KEY) return res.status(400).json({ error: 'G2B_SERVICE_KEY 환경변수가 없습니다.' });
+  if (g2bJob?.status === 'running') return res.json({ ok: true, started: false, job: g2bJob });
+  g2bJob = {
+    status: 'running', startedAt: new Date().toISOString(), endedAt: new Date().toISOString(),
+    completedWindows: 0, totalWindows: 168, received: 0, inserted: 0, updated: 0,
+    skipped: 0, pages: 0, current: '', errors: [], finishedAt: null
+  };
+  void g2bRunJob(g2bJob);
+  res.status(202).json({ ok: true, started: true, job: g2bJob });
+});
+app.get('/api/admin/g2b/progress', loadUser, requireAdminRole, (req, res) => {
+  res.json({ job: g2bJob });
 });
 app.get("/api/admin/g2b/status", loadUser, requireAdminRole, async (req,res) => {
   try {
