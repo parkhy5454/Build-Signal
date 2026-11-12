@@ -1596,6 +1596,28 @@ app.get('/api/permits/pipeline',loadUser,async(req,res)=>{
  }catch(e){res.status(500).json({error:'건축허가 영업 목록 조회 실패'});}
 });
 
+
+app.post('/api/permits/leads/pipeline/bulk',loadUser,async(req,res)=>{
+ const ids=req.body?.projectIds;
+ if(!Array.isArray(ids)||!ids.length||ids.length>30||!ids.every(x=>Number.isSafeInteger(x)&&x>0))
+  return res.status(400).json({error:'현장 ID는 1~30개의 양의 정수여야 합니다.'});
+ if(new Set(ids).size!==ids.length)return res.status(400).json({error:'중복 현장 ID가 있습니다.'});
+ try{
+  const result=await query(`WITH valid AS (
+   SELECT id FROM projects WHERE id=ANY($1::int[]) AND source='arch_hub_permit'
+  ), inserted AS (
+   INSERT INTO sales_pipeline(project_id,user_key,status,note)
+   SELECT id,$2,'NEW','' FROM valid
+   ON CONFLICT(project_id,user_key) DO NOTHING RETURNING project_id
+  )
+  SELECT (SELECT COUNT(*)::int FROM inserted) AS inserted,
+   (SELECT COUNT(*)::int FROM valid) AS valid`,[ids,String(req.user.id)]);
+  const row=result.rows[0];
+  res.json({requested:ids.length,added:row.inserted,alreadyRegistered:row.valid-row.inserted,notFound:ids.length-row.valid,
+   note:'기존 등록 현장의 영업 상태·메모는 변경하지 않았습니다.'});
+ }catch(e){res.status(500).json({error:'영업 후보 일괄 등록 실패'});}
+});
+
 app.post('/api/permits/leads/:id/pipeline',loadUser,async(req,res)=>{
  if(!/^\d+$/.test(req.params.id))return res.status(400).json({error:'잘못된 현장 ID'});
  const status=String(req.body?.status||'NEW');
