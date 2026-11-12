@@ -121,6 +121,31 @@ async function initDb() {
     );
     ALTER TABLE sales_pipeline ADD COLUMN IF NOT EXISTS next_contact_date DATE;
     ALTER TABLE sales_pipeline ADD COLUMN IF NOT EXISTS priority TEXT NOT NULL DEFAULT 'NORMAL';
+    CREATE TABLE IF NOT EXISTS sales_stage_history (
+      id BIGSERIAL PRIMARY KEY,
+      project_id BIGINT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      user_key TEXT NOT NULL,
+      from_status TEXT,
+      to_status TEXT NOT NULL,
+      changed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_sales_stage_history_user_project
+      ON sales_stage_history(user_key,project_id,changed_at DESC);
+    CREATE OR REPLACE FUNCTION record_sales_stage_change() RETURNS TRIGGER AS $$
+    BEGIN
+      IF TG_OP='INSERT' THEN
+        INSERT INTO sales_stage_history(project_id,user_key,from_status,to_status)
+        VALUES(NEW.project_id,NEW.user_key,NULL,NEW.status);
+      ELSIF NEW.status IS DISTINCT FROM OLD.status THEN
+        INSERT INTO sales_stage_history(project_id,user_key,from_status,to_status)
+        VALUES(NEW.project_id,NEW.user_key,OLD.status,NEW.status);
+      END IF;
+      RETURN NEW;
+    END;
+    $$ LANGUAGE plpgsql;
+    DROP TRIGGER IF EXISTS trg_sales_stage_change ON sales_pipeline;
+    CREATE TRIGGER trg_sales_stage_change AFTER INSERT OR UPDATE OF status ON sales_pipeline
+      FOR EACH ROW EXECUTE FUNCTION record_sales_stage_change();
     CREATE TABLE IF NOT EXISTS sales_activities (
       id BIGSERIAL PRIMARY KEY,
       project_id BIGINT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
