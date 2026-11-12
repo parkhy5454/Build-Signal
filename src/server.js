@@ -688,11 +688,20 @@ app.get('/api/admin/permits/regional-leads',loadUser,requireAdminRole,async(req,
   if(!region||region.length>100)return res.status(400).json({error:'지역명을 1~100자로 입력하세요.'});
   const profile=profiles[req.query.profile]?req.query.profile:'automation';
   const limit=Math.min(100,Math.max(1,Number.parseInt(req.query.limit,10)||30));
+  const stage=String(req.query.stage||'ALL');
+  const days=Number(req.query.days||0);
+  const registration=String(req.query.registration||'ALL');
+  if(!['ALL','PERMIT','STARTED','UNKNOWN'].includes(stage)||![0,7,30,90].includes(days)||!['ALL','UNREGISTERED','REGISTERED'].includes(registration))
+   return res.status(400).json({error:'필터 조건을 확인하세요.'});
   const result=await query(`SELECT p.*, (SELECT COUNT(*)::int FROM project_contacts c WHERE c.project_id=p.id) AS contact_count,
    (SELECT sp.status FROM sales_pipeline sp WHERE sp.project_id=p.id AND sp.user_key=$2) AS pipeline_status
    FROM projects p WHERE p.source='arch_hub_permit'
    AND COALESCE(NULLIF(BTRIM(p.region),''),'지역 미확인')=$1
-   ORDER BY p.updated_at DESC LIMIT 2000`,[region,String(req.user.id)]);
+   AND ($3='ALL' OR p.stage=$3)
+   AND ($4::int=0 OR p.created_at>=NOW()-($4::int*INTERVAL '1 day'))
+   AND ($5='ALL' OR ($5='REGISTERED' AND EXISTS(SELECT 1 FROM sales_pipeline sp WHERE sp.project_id=p.id AND sp.user_key=$2))
+    OR ($5='UNREGISTERED' AND NOT EXISTS(SELECT 1 FROM sales_pipeline sp WHERE sp.project_id=p.id AND sp.user_key=$2)))
+   ORDER BY p.updated_at DESC LIMIT 2000`,[region,String(req.user.id),stage,days,registration]);
   const now=Date.now();
   const rows=result.rows.map(p=>{
    const base=scoreProject(p,profile);
@@ -709,8 +718,8 @@ app.get('/api/admin/permits/regional-leads',loadUser,requireAdminRole,async(req,
    return {id:p.id,name:p.name,address:p.address,region:p.region,buildingType:p.building_type,
     stage:p.stage,permitDate:p.permit_date,areaSqm:p.area_sqm,contactCount:p.contact_count,pipelineStatus:p.pipeline_status||null,score,reasons};
   }).sort((a,b)=>b.score-a.score||(new Date(b.permitDate||0)-new Date(a.permitDate||0))).slice(0,limit);
-  res.json({region,profile:profiles[profile].label,rows,scanned:result.rows.length,
-   note:'선택 지역의 최근 갱신 2,000건 중 휴리스틱 우선순위입니다. 실제 수주 가능성이나 해당 지역 전체 현장 순위를 보장하지 않습니다.'});
+  res.json({region,profile:profiles[profile].label,stage,days,registration,rows,scanned:result.rows.length,
+   note:'필터 적용 후 최근 갱신 2,000건 중 휴리스틱 우선순위입니다. 기간 필터는 건축허가일이 아닌 DB 최초 등록일 기준입니다. 실제 수주 가능성이나 해당 지역 전체 현장 순위를 보장하지 않습니다.'});
  }catch(e){res.status(500).json({error:'지역별 건축허가 영업 후보 조회 실패'});}
 });
 
