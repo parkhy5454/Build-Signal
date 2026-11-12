@@ -461,6 +461,28 @@ app.post('/api/admin/permits/sync',loadUser,requireAdminRole,(req,res)=>{
 
 
 
+
+app.get('/api/admin/permits/region-queues',loadUser,requireAdminRole,async(req,res)=>{
+ try{const r=await query("SELECT id,label,query_text AS \"queryText\",status,next_batch AS \"nextBatch\",jsonb_array_length(regions) AS \"regionCount\",created_at AS \"createdAt\" FROM permit_region_queues ORDER BY id DESC LIMIT 50");res.json({queues:r.rows});}
+ catch(e){res.status(500).json({error:'저장된 수집 목록 조회 실패'});}
+});
+app.post('/api/admin/permits/region-queues',loadUser,requireAdminRole,async(req,res)=>{
+ const q=String(req.body?.q||'').trim(),label=String(req.body?.label||q).trim();
+ if(q.length<2||q.length>100||!label||label.length>100)return res.status(400).json({error:'지역 검색어와 목록 이름은 2~100자여야 합니다.'});
+ try{
+  const r=await query("SELECT code,name FROM permit_legal_dong_codes WHERE active=TRUE AND name ILIKE $1 ORDER BY code LIMIT 200",['%'+q+'%']);
+  if(!r.rows.length)return res.status(404).json({error:'일치하는 법정동이 없습니다.'});
+  const regions=r.rows.map(x=>({name:x.name,code:x.code,sigunguCd:x.code.slice(0,5),bjdongCd:x.code.slice(5,10)}));
+  const saved=await query("INSERT INTO permit_region_queues(label,query_text,regions) VALUES($1,$2,$3::jsonb) RETURNING id",[label,q,JSON.stringify(regions)]);
+  res.json({id:saved.rows[0].id,regionCount:regions.length,batchCount:Math.ceil(regions.length/20),status:'prepared'});
+ }catch(e){res.status(500).json({error:'수집 목록 저장 실패'});}
+});
+app.get('/api/admin/permits/region-queues/:id',loadUser,requireAdminRole,async(req,res)=>{
+ if(!/^\d+$/.test(req.params.id))return res.status(400).json({error:'잘못된 목록 ID'});
+ try{const r=await query("SELECT id,label,query_text AS \"queryText\",regions,status,next_batch AS \"nextBatch\" FROM permit_region_queues WHERE id=$1",[req.params.id]);if(!r.rows.length)return res.status(404).json({error:'목록 없음'});res.json({queue:r.rows[0]});}
+ catch(e){res.status(500).json({error:'수집 목록 상세 조회 실패'});}
+});
+
 app.get('/api/admin/permits/legal-dong/queue-preview',loadUser,requireAdminRole,async(req,res)=>{
  const q=String(req.query.q||'').trim();
  if(q.length<2||q.length>100)return res.status(400).json({error:'지역 검색어는 2~100자여야 합니다.'});
