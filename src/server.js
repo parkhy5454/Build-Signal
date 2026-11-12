@@ -429,13 +429,13 @@ app.get('/api/project-groups', async(req,res)=>{
   const page=Math.max(1,parseInt(req.query.page,10)||1);
   const limit=24;
   const where=['1=1'],args=[];
-  if(q){args.push('%'+q+'%');where.push(`(g.title ILIKE ${args.length} OR g.owner ILIKE ${args.length})`);}
-  if(region){args.push('%'+region+'%');where.push(`g.region ILIKE ${args.length}`);}
-  if(trade){args.push('%'+trade+'%');where.push(`EXISTS(SELECT 1 FROM projects p WHERE p.project_group_id=g.id AND p.building_type ILIKE ${args.length})`);}
+  if(q){args.push('%'+q+'%');where.push(`(g.title ILIKE $${args.length} OR g.owner ILIKE $${args.length})`);}
+  if(region){args.push('%'+region+'%');where.push(`g.region ILIKE $${args.length}`);}
+  if(trade){args.push('%'+trade+'%');where.push(`EXISTS(SELECT 1 FROM projects p WHERE p.project_group_id=g.id AND p.building_type ILIKE $${args.length})`);}
   const clause=where.join(' AND ');
   const total=await query(`SELECT COUNT(*)::int AS n FROM project_groups g WHERE ${clause}`,args);
   const rows=await query(`SELECT g.id,g.title,g.owner,g.region,g.location,
-    COUNT(p.id)::int AS notice_count,
+    COUNT(DISTINCT p.id)::int AS notice_count,
     COUNT(DISTINCT p.building_type)::int AS trade_count,
     COUNT(DISTINCT c.id)::int AS contact_count,
     MAX(p.updated_at) AS latest_notice
@@ -443,7 +443,7 @@ app.get('/api/project-groups', async(req,res)=>{
     LEFT JOIN project_contacts c ON c.project_id=p.id
     WHERE ${clause}
     GROUP BY g.id ORDER BY notice_count DESC,latest_notice DESC
-    LIMIT ${args.length+1} OFFSET ${args.length+2}`,[...args,limit,(page-1)*limit]);
+    LIMIT $${args.length+1} OFFSET $${args.length+2}`,[...args,limit,(page-1)*limit]);
   res.json({rows:rows.rows,total:total.rows[0].n,page,pages:Math.ceil(total.rows[0].n/limit)});
  }catch(e){res.status(500).json({error:e.message});}
 });
