@@ -10,6 +10,7 @@ const { query, initDb } = require("./db");
 const { profiles, scoreProject } = require("./scoring");
 const { permitDate, permitLifecycle } = require("./archhub");
 const { createAutoIngest } = require("./auto-ingest");
+const { meta:regionCatalogMeta,provinces,regionAliases,installRegionCatalog } = require("./region-catalog");
 
 const app = express();
 // Render terminates HTTPS at its proxy; trust the proxy so secure session cookies are issued.
@@ -967,7 +968,7 @@ app.get("/api/projects", async (req, res) => {
     if(selectedStage && !STAGES.includes(selectedStage))return res.status(400).json({error:"잘못된 진행 단계입니다."});
     const keyword = keywordStage ? "" : rawKeyword;
     if (keyword) add(`%${keyword}%`, "(p.name ILIKE ? OR p.address ILIKE ? OR p.owner ILIKE ? OR p.designer ILIKE ? OR p.contractor ILIKE ? OR EXISTS (SELECT 1 FROM project_contacts pc WHERE pc.project_id=p.id AND (pc.organization ILIKE ? OR pc.person_name ILIKE ?)))");
-    if (region) add(`%${String(region).slice(0,60)}%`, "p.region ILIKE ?");
+    if (region) {const names=regionAliases(String(region).slice(0,60));params.push(names.map(x=>`%${x}%`));where.push(`p.region ILIKE ANY($${params.length}::text[])`);}
     if (selectedStage) add(selectedStage, "p.stage = ?");
     if (type) add(`%${String(type).slice(0,80)}%`, "p.building_type ILIKE ?");
     if (contact === 'any') where.push("EXISTS (SELECT 1 FROM project_contacts pc WHERE pc.project_id=p.id)");
@@ -1021,7 +1022,7 @@ app.get('/api/project-groups', async(req,res)=>{
   const limit=24;
   const where=['1=1'],args=[];
   if(q){args.push('%'+q+'%');where.push(`(g.title ILIKE $${args.length} OR g.owner ILIKE $${args.length})`);}
-  if(region){args.push('%'+region+'%');where.push(`g.region ILIKE $${args.length}`);}
+  if(region){args.push(regionAliases(region).map(x=>'%'+x+'%'));where.push(`g.region ILIKE ANY($${args.length}::text[])`);}
   if(trade){args.push('%'+trade+'%');where.push(`EXISTS(SELECT 1 FROM projects p WHERE p.project_group_id=g.id AND p.building_type ILIKE $${args.length})`);}
   const clause=where.join(' AND ');
   const total=await query(`SELECT COUNT(*)::int AS n FROM project_groups g WHERE ${clause}`,args);
@@ -1792,6 +1793,7 @@ const automaticIngest=createAutoIngest({query,
   if(job.status!=='completed')throw Error(job.errors[0]||'나라장터 자동 수집 실패');
  }
 });
+app.get('/api/regions',(req,res)=>res.json({regions:provinces,catalogDate:regionCatalogMeta.retrievedOn}));
 app.get('/api/ingestion/freshness',async(req,res)=>{
  try{
   const states=await query("SELECT source,last_success_at,last_attempt_at,next_due_at,last_error,CASE WHEN call_day=(NOW() AT TIME ZONE 'Asia/Seoul')::date THEN daily_calls ELSE 0 END AS daily_calls,call_day,lease_until FROM auto_ingest_state ORDER BY source");
@@ -1799,12 +1801,13 @@ app.get('/api/ingestion/freshness',async(req,res)=>{
    COUNT(*) FILTER (WHERE enabled AND last_cycle_at IS NOT NULL)::int AS completed_regions,
    MIN(last_cycle_at) FILTER (WHERE enabled) AS oldest_cycle,
    COUNT(*) FILTER (WHERE enabled AND last_error IS NOT NULL)::int AS failed_regions FROM auto_permit_regions`);
-  res.json({enabled:automaticIngest.enabled(),configured:{permits:!!process.env.ARCH_HUB_SERVICE_KEY,bids:!!process.env.G2B_SERVICE_KEY},sources:states.rows,coverage:coverage.rows[0],
-   note:'국토부는 등록 지역을 순회 갱신합니다. 처리량과 원천 API 반영 주기에 따라 지연될 수 있습니다. 지역 코드가 등록되지 않은 지역은 자동 수집 범위에 포함되지 않습니다.'});
+  res.json({enabled:automaticIngest.enabled(),configured:{permits:!!process.env.ARCH_HUB_SERVICE_KEY,bids:!!process.env.G2B_SERVICE_KEY},sources:states.rows,coverage:coverage.rows[0],catalogDate:regionCatalogMeta.retrievedOn,
+   note:'국토부는 내장된 전국 공식 지역코드로 순회 적재합니다. 지역 선택은 저장된 자료를 필터링하며, 지역별 수집 완료를 의미하지 않습니다. 처리량과 원천 반영 주기에 따라 지연될 수 있습니다.'});
  }catch{res.status(500).json({error:'자동 수집 현황 조회 실패'});}
 });
 async function start() {
   await initDb();
+  await installRegionCatalog(query);
   if (process.env.ADMIN_EMAIL && process.env.ADMIN_PASSWORD) {
     const email=String(process.env.ADMIN_EMAIL).trim().toLowerCase();
     const hash=await bcrypt.hash(String(process.env.ADMIN_PASSWORD),12);

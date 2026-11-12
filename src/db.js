@@ -70,6 +70,8 @@ async function initDb() {
       active BOOLEAN NOT NULL DEFAULT TRUE,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
+    ALTER TABLE permit_legal_dong_codes ADD COLUMN IF NOT EXISTS catalog_origin TEXT NOT NULL DEFAULT 'manual';
+    CREATE TABLE IF NOT EXISTS region_catalog_state(id INTEGER PRIMARY KEY CHECK(id=1),version TEXT NOT NULL,loaded_at TIMESTAMPTZ NOT NULL);
     CREATE INDEX IF NOT EXISTS idx_permit_legal_dong_name ON permit_legal_dong_codes(name);
     CREATE TABLE IF NOT EXISTS permit_region_presets (
       id BIGSERIAL PRIMARY KEY,
