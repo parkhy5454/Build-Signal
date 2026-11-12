@@ -207,19 +207,23 @@ const PROJECT_TRADES = [
 ];
 function projectGroupIdentity(p) {
   if (p.source !== 'g2b_bid' || !p.name || !p.owner || !p.address || !p.region) return null;
-  let title = String(p.name).normalize('NFKC').replace(/\\s+/g,' ').trim();
+  let title = String(p.name).normalize('NFKC').replace(/\s+/g,' ').trim();
   let trade = null;
   // 오직 말미에 명시된 공종만 제거합니다. 불확실한 이름은 개별 프로젝트로 유지합니다.
   for (const [label, re] of PROJECT_TRADES) {
-    const m = title.match(new RegExp('(?:\\\\s*[(\\\\[]?\\\\s*)'+re.source+'(?:\\\\s*[)\\\\]]?)\\\\s*$'));
-    if (m) { trade=label; title=title.slice(0,m.index).replace(/[\\s()\\[\\]·,/-]+$/g,'').trim(); break; }
+    const match = re.exec(title);
+    if (match) {
+      trade=label;
+      title=title.slice(0,match.index).replace(/[\s()\[\]·,/-]+$/g,'').trim();
+      break;
+    }
   }
   if (!trade || title.length < 8) return null;
-  const owner=String(p.owner).normalize('NFKC').replace(/\\s+/g,'').trim();
-  const location=String(p.address).normalize('NFKC').replace(/\\s+/g,'').trim();
+  const owner=String(p.owner).normalize('NFKC').replace(/\s+/g,'').trim();
+  const location=String(p.address).normalize('NFKC').replace(/\s+/g,'').trim();
   const region=String(p.region).normalize('NFKC').trim();
   if (!owner || !location || location.length < 3) return null;
-  const key=crypto.createHash('sha256').update([title.replace(/\\s+/g,''),owner,region,location].join('|')).digest('hex');
+  const key=crypto.createHash('sha256').update([title.replace(/\s+/g,''),owner,region,location].join('|')).digest('hex');
   return {key,title,owner:p.owner,region:p.region,location:p.address,trade};
 }
 async function linkProjectGroup(p) {
