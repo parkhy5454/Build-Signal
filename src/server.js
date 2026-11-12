@@ -482,6 +482,32 @@ app.get('/api/admin/project-groups/health',loadUser,requireAdminRole,async(req,r
  }catch(e){res.status(500).json({error:e.message});}
 });
 
+// Preview matching decisions without writing any data.
+app.get('/api/admin/project-groups/preview',loadUser,requireAdminRole,async(req,res)=>{
+ try{
+  const limit=Math.min(100,Math.max(1,Number.parseInt(req.query.limit,10)||40));
+  const cursor=Math.max(0,Number.parseInt(req.query.cursor,10)||0);
+  const r=await query(`SELECT id,source,name,owner,address,region
+    FROM projects WHERE source='g2b_bid' AND project_group_id IS NULL AND id>$1
+    ORDER BY id LIMIT $2`,[cursor,limit]);
+  const identities=r.rows.map(p=>({p,identity:projectGroupIdentity(p)}));
+  const keys=[...new Set(identities.filter(x=>x.identity).map(x=>x.identity.key))];
+  const found=keys.length?await query('SELECT id,group_key,title FROM project_groups WHERE group_key=ANY($1::text[])',[keys]):{rows:[]};
+  const existing=new Map(found.rows.map(g=>[g.group_key,g]));
+  const occurrences=new Map();
+  for(const {identity} of identities){if(identity)occurrences.set(identity.key,(occurrences.get(identity.key)||0)+1);}
+  const rows=identities.map(({p,identity})=>{
+    const group=identity?existing.get(identity.key):null;
+    return {id:p.id,notice_name:p.name,owner:p.owner,region:p.region,
+      proposed_group_name:identity?.title||null,existing_group_id:group?.id||null,
+      status:!identity?'manual_review':group?'existing_group':occurrences.get(identity.key)>1?'new_group_candidate':'unmatched_candidate',
+      explanation:!identity?'명칭·공종·발주처·위치 등 필수 기준 미충족':group?'동일 식별키를 가진 기존 그룹 존재':'기존 그룹 없음: 자동 병합 전 검토 필요'};
+  });
+  res.json({rows,processed:rows.length,next_cursor:r.rows.length?r.rows[r.rows.length-1].id:cursor,done:r.rows.length<limit,read_only:true,
+    warning:'이 미리보기는 DB를 변경하지 않습니다. 같은 페이지에 없는 공고는 후보 집계에 포함되지 않습니다.'});
+ }catch(e){res.status(500).json({error:e.message});}
+});
+
 app.post('/api/admin/project-groups/backfill',loadUser,requireAdminRole,async(req,res)=>{
  try{
   const limit=Math.min(500,Math.max(1,parseInt(req.body?.limit,10)||200));
