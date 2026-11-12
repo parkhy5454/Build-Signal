@@ -497,6 +497,17 @@ app.post('/api/admin/permits/region-queues/:id/run-next',loadUser,requireAdminRo
  const regions=queue.regions.slice(queue.next_batch*20,(queue.next_batch+1)*20);
  permitJob={status:'running',queueId:queue.id,batchNumber:queue.next_batch+1,regionCount:regions.length,completedRegions:0,received:0,inserted:0,updated:0,skipped:0,pages:0,total:0,startedAt:new Date().toISOString()};
  const job=permitJob;
+ // Refresh the persisted lease timestamp while a region's API pages are in flight.
+ // A stale recovery may only run after 60 minutes without this heartbeat.
+ let heartbeatBusy=false;
+ const heartbeat=setInterval(()=>{
+  if(heartbeatBusy||job.status!=='running')return;
+  heartbeatBusy=true;
+  query("UPDATE permit_region_queues SET updated_at=NOW() WHERE id=$1 AND next_batch=$2 AND status='running'",[queue.id,queue.next_batch])
+   .catch(e=>{console.error('Permit queue heartbeat failed:',e.message);})
+   .finally(()=>{heartbeatBusy=false;});
+ },30000);
+ heartbeat.unref?.();
  void (async()=>{
   try{
    await savePermitJob(job);
@@ -506,6 +517,7 @@ app.post('/api/admin/permits/region-queues/:id/run-next',loadUser,requireAdminRo
     for(const key of ['received','inserted','updated','skipped','pages'])job[key]+=child[key];
     if(child.status!=='completed')throw Error(region.name+': '+(child.error||'수집 실패'));
     job.completedRegions++;
+    await query("UPDATE permit_region_queues SET updated_at=NOW() WHERE id=$1 AND next_batch=$2 AND status='running'",[queue.id,queue.next_batch]);
     await savePermitJob(job);
    }
    const advanced=await query("UPDATE permit_region_queues SET next_batch=next_batch+1,status=CASE WHEN (next_batch+1)*20>=jsonb_array_length(regions) THEN 'completed' ELSE 'prepared' END,updated_at=NOW() WHERE id=$1 AND next_batch=$2 RETURNING next_batch",[queue.id,queue.next_batch]);
@@ -514,7 +526,7 @@ app.post('/api/admin/permits/region-queues/:id/run-next',loadUser,requireAdminRo
   }catch(e){
    job.status='failed';job.error=String(e.message).slice(0,200);
    await query("UPDATE permit_region_queues SET status='failed',updated_at=NOW() WHERE id=$1 AND next_batch=$2 AND status='running'",[queue.id,queue.next_batch]).catch(()=>{});
-  }finally{job.finishedAt=new Date().toISOString();await savePermitJob(job).catch(()=>{});}
+  }finally{clearInterval(heartbeat);job.finishedAt=new Date().toISOString();await savePermitJob(job).catch(()=>{});}
  })();
  res.status(202).json({job});
 });
