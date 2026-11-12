@@ -477,6 +477,18 @@ app.post('/api/admin/permits/region-queues',loadUser,requireAdminRole,async(req,
   res.json({id:saved.rows[0].id,regionCount:regions.length,batchCount:Math.ceil(regions.length/20),status:'prepared'});
  }catch(e){res.status(500).json({error:'수집 목록 저장 실패'});}
 });
+
+app.post('/api/admin/permits/region-queues/:id/checkpoint',loadUser,requireAdminRole,async(req,res)=>{
+ if(!/^\d+$/.test(req.params.id))return res.status(400).json({error:'잘못된 목록 ID'});
+ const nextBatch=Number(req.body?.nextBatch);
+ if(!Number.isSafeInteger(nextBatch)||nextBatch<0)return res.status(400).json({error:'완료 묶음 수는 0 이상의 정수여야 합니다.'});
+ try{
+  const r=await query("UPDATE permit_region_queues SET next_batch=$2,status=CASE WHEN $2>=CEIL(jsonb_array_length(regions)/20.0) THEN 'completed' ELSE 'prepared' END,updated_at=NOW() WHERE id=$1 AND $2<=CEIL(jsonb_array_length(regions)/20.0) AND $2>=next_batch RETURNING id,next_batch AS \"nextBatch\",status",[req.params.id,nextBatch]);
+  if(!r.rows.length)return res.status(409).json({error:'목록이 없거나 완료 위치가 유효하지 않습니다. 이미 완료한 위치로 되돌릴 수 없습니다.'});
+  res.json({queue:r.rows[0]});
+ }catch(e){res.status(500).json({error:'완료 위치 저장 실패'});}
+});
+
 app.get('/api/admin/permits/region-queues/:id',loadUser,requireAdminRole,async(req,res)=>{
  if(!/^\d+$/.test(req.params.id))return res.status(400).json({error:'잘못된 목록 ID'});
  try{const r=await query("SELECT id,label,query_text AS \"queryText\",regions,status,next_batch AS \"nextBatch\" FROM permit_region_queues WHERE id=$1",[req.params.id]);if(!r.rows.length)return res.status(404).json({error:'목록 없음'});res.json({queue:r.rows[0]});}
