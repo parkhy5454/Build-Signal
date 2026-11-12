@@ -37,3 +37,11 @@
 @media(max-width:1250px){.contact-summary{grid-template-columns:repeat(4,minmax(0,1fr))}}
 @media(max-width:900px){.contact-summary{grid-template-columns:repeat(3,minmax(0,1fr))}.filters{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:620px){.contact-summary{grid-template-columns:repeat(2,minmax(0,1fr))}.roles-grid{grid-template-columns:1fr}.modal-card{padding:22px 16px}.project-card{gap:14px}.project-card .card-actions{justify-content:flex-end}.project-detail-title{font-size:19px}.top-actions{flex-wrap:wrap;justify-content:flex-end}.filters{grid-template-columns:1fr 1fr}}
+
+/* Stage 2: grouped projects */
+.trade-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin:14px 0 20px}
+.trade-notice{background:#f8faff;border:1px solid #e0e8f4;border-radius:12px;padding:15px;min-width:0}
+.trade-notice h4{margin:10px 0;line-height:1.5;overflow-wrap:anywhere}
+.trade-notice p{color:#718096;font-size:12px;margin:7px 0}
+.trade-notice a{color:#2463eb;font-size:12px}
+@media(max-width:620px){.trade-grid{grid-template-columns:1fr}}
