@@ -148,7 +148,7 @@ async function initDb() {
       lease_token TEXT,lease_until TIMESTAMPTZ,last_error TEXT,record_count INTEGER NOT NULL DEFAULT 0
     );
     ALTER TABLE directory_sync_state ADD COLUMN IF NOT EXISTS config_revision TEXT;
-    INSERT INTO directory_sync_state(source) VALUES('architects'),('busan_developers'),('daegu_developers'),('incheon_developers'),('ulsan_developers'),('chungnam_developers') ON CONFLICT DO NOTHING;
+    INSERT INTO directory_sync_state(source) VALUES('gyeonggi_developers'),('architects'),('busan_developers'),('daegu_developers'),('incheon_developers'),('ulsan_developers'),('chungnam_developers') ON CONFLICT DO NOTHING;
     CREATE TABLE IF NOT EXISTS party_contact_decisions (
       id BIGSERIAL PRIMARY KEY,evidence_id BIGINT NOT NULL REFERENCES project_party_evidence(id) ON DELETE CASCADE,
       directory_id BIGINT NOT NULL REFERENCES organization_directory(id),decision TEXT NOT NULL CHECK(decision IN ('confirmed','rejected')),

@@ -28,7 +28,7 @@ test('architect API and developer API accept valid schemas, require approval and
 });
 test('refresh failure never activates a partial snapshot or clears old directory data',async()=>{
  const calls=[];let writes=0;const query=async(sql,args)=>{calls.push({sql,args});return {rows:[{source:'architects'}]};};
- const worker=createDirectorySync({query,transaction:async()=>{writes++;},request:async()=>{throw Error('source unavailable');}});
+ const worker=createDirectorySync({query,transaction:async()=>{writes++;},request:async()=>{throw Error('source unavailable');},gyeonggiRequest:async()=>{throw Error('source unavailable');}});
  await worker.run();assert.equal(writes,0);assert(calls.some(x=>x.sql.includes('SET last_error=')));assert(!calls.some(x=>x.sql.includes('SET is_current=')));
 });
 test('complete snapshot activates in one transaction and retains historical records',async()=>{
