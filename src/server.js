@@ -146,14 +146,18 @@ app.post("/api/admin/g2b/sync", loadUser, requireAdminRole, async (req, res) => 
     inqryEndDt: fmt(end),
     type: "json"
   });
-  const endpoint = "https://apis.data.go.kr/1230000/ad/BidPublicInfoService/getBidPblancListInfoCnstwk";
+  const endpoint = "https://apis.data.go.kr/1230000/ad/BidPublicInfoService02/getBidPblancListInfoCnstwk02";
   try {
     const response = await fetch(`${endpoint}?${params.toString()}`, { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(25000) });
     const rawText = await response.text();
+    if (!response.ok) {
+      // 응답 본문에 인증키가 포함될 가능성은 없지만, 오류 진단용으로 짧게만 표시합니다.
+      const detail = rawText.replace(/<[^>]*>/g, " ").replace(/\\s+/g, " ").trim().slice(0, 240);
+      throw new Error(`나라장터 HTTP 오류: ${response.status}${detail ? ` — ${detail}` : ""}`);
+    }
     let payload;
     try { payload = JSON.parse(rawText); }
-    catch { throw new Error(`나라장터 응답을 JSON으로 해석하지 못했습니다(HTTP ${response.status}). API 명세의 응답 형식을 확인해 주세요.`); }
-    if (!response.ok) throw new Error(`나라장터 HTTP 오류: ${response.status}`);
+    catch { throw new Error(`나라장터 응답을 JSON으로 해석하지 못했습니다. 응답 앞부분: ${rawText.slice(0,180)}`); }
     const items = parseG2bItems(payload);
     let inserted = 0, updated = 0, skipped = 0;
     for (const item of items) {
