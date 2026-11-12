@@ -581,13 +581,13 @@ document.getElementById('permitRegionalBulkAdd').addEventListener('click',async(
   const r=await fetch('/api/permits/leads/pipeline/bulk',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({projectIds:ids})});
   const d=await r.json();if(!r.ok)throw Error(d.error||'일괄 등록 실패');
   out.textContent='신규 등록 '+d.added+'건 / 이미 등록됨 '+d.alreadyRegistered+'건 / 대상 없음 '+d.notFound+'건. '+d.note;
-  if(d.added>0){document.querySelectorAll('.permit-regional-bulk:checked').forEach(box=>{box.checked=false;box.disabled=true;box.title='이번 작업에서 영업 등록됨';});updatePermitRegionalBulkSelection();}
+  if(d.added>0||d.alreadyRegistered>0){await document.getElementById('permitRegionalLeadsLoad').click();}
  }catch(e){out.textContent=e.message;}finally{btn.disabled=false;}
 });
 document.getElementById('permitRegionalLeadChoose').addEventListener('click',()=>{
  const id=document.getElementById('permitRegionalLeadSelect').value;
  const out=document.getElementById('permitRegionalLeadChooseOutput');
- if(!/^\\d+$/.test(id)||Number(id)<1){out.textContent='영업 후보 현장을 먼저 선택하세요.';return;}
+ if(!/^\d+$/.test(id)||Number(id)<1){out.textContent='영업 후보 현장을 먼저 선택하세요.';return;}
  document.getElementById('permitLeadProjectId').value=id;
  document.getElementById('permitLeadPipelineStatus').value='NEW';
  document.getElementById('permitLeadPipelineNote').value='';
