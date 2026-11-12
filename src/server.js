@@ -89,10 +89,20 @@ function getG2bResponseDiagnostics(payload) {
   const root = payload?.response || payload?.Response || payload?.data?.response || payload?.data?.Response || payload;
   const body = root?.body || root?.Body || payload?.body || payload?.Body || {};
   const header = root?.header || root?.Header || {};
+  const responseError =
+    root?.["nkoneps.com.response.ResponseError"] ??
+    root?.["ResponseError"] ??
+    payload?.["nkoneps.com.response.ResponseError"] ??
+    payload?.["ResponseError"] ??
+    null;
+  const errorText = responseError == null
+    ? null
+    : (typeof responseError === "string" ? responseError : JSON.stringify(responseError)).slice(0, 1200);
   return {
     resultCode: header?.resultCode ?? header?.RESULTCODE ?? null,
     resultMsg: header?.resultMsg ?? header?.RESULTMSG ?? null,
     totalCount: body?.totalCount ?? body?.TotalCount ?? body?.total_count ?? null,
+    responseError: errorText,
     rootKeys: Object.keys(root || {}).slice(0, 20),
     bodyKeys: Object.keys(body || {}).slice(0, 20)
   };
@@ -187,9 +197,11 @@ app.post("/api/admin/g2b/sync", loadUser, requireAdminRole, async (req, res) => 
     const diagnostics = getG2bResponseDiagnostics(payload);
     if (items.length === 0) {
       const total = diagnostics.totalCount;
-      const hint = total !== null && Number(total) > 0
-        ? `API는 총 ${total}건을 반환했지만 항목 배열을 읽지 못했습니다. 응답 구조를 확인해야 합니다.`
-        : `API 응답에서 공고 항목이 확인되지 않았습니다. resultCode=${diagnostics.resultCode ?? "없음"}, totalCount=${total ?? "없음"}, rootKeys=${diagnostics.rootKeys.join(",")}, bodyKeys=${diagnostics.bodyKeys.join(",")}`;
+      const hint = diagnostics.responseError
+        ? `나라장터 API 오류 응답: ${diagnostics.responseError}`
+        : total !== null && Number(total) > 0
+          ? `API는 총 ${total}건을 반환했지만 항목 배열을 읽지 못했습니다. 응답 구조를 확인해야 합니다.`
+          : `API 응답에서 공고 항목이 확인되지 않았습니다. resultCode=${diagnostics.resultCode ?? "없음"}, totalCount=${total ?? "없음"}, rootKeys=${diagnostics.rootKeys.join(",")}, bodyKeys=${diagnostics.bodyKeys.join(",")}`;
       await query("INSERT INTO ingest_logs(source,received_count,inserted_count,status,message) VALUES($1,0,0,'ERROR',$2)",
         ["g2b_bid", hint.slice(0,1000)]);
       return res.status(502).json({ error: hint, diagnostics, range: { from: fmt(start), to: fmt(end) } });
