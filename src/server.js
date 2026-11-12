@@ -1154,6 +1154,22 @@ app.patch('/api/permits/leads/:id/followup',loadUser,async(req,res)=>{
 
 
 
+
+app.get('/api/permits/unscheduled-followups',loadUser,async(req,res)=>{
+ try{
+  const limit=Math.min(100,Math.max(1,Number.parseInt(req.query.limit,10)||50));
+  const offset=Math.max(0,Math.min(100000,Number.parseInt(req.query.offset,10)||0));
+  const userKey=String(req.user.id);
+  const base="FROM sales_pipeline sp JOIN projects p ON p.id=sp.project_id WHERE sp.user_key=$1 AND p.source='arch_hub_permit' AND sp.status NOT IN ('WON','LOST') AND sp.next_contact_date IS NULL";
+  const total=await query(`SELECT COUNT(*)::int AS total,COUNT(*) FILTER (WHERE sp.priority='HIGH')::int AS "highPriority" ${base}`,[userKey]);
+  const rows=await query(`SELECT p.id,p.name,p.region,sp.status,sp.priority,sp.updated_at AS "updatedAt"
+   ${base} ORDER BY CASE sp.priority WHEN 'HIGH' THEN 0 WHEN 'NORMAL' THEN 1 ELSE 2 END ASC,sp.updated_at ASC,p.id DESC LIMIT $2 OFFSET $3`,
+   [userKey,limit,offset]);
+  res.json({summary:total.rows[0],rows:rows.rows,limit,offset,
+   note:'수주·실패를 제외한 영업 관리 현장 중 다음 연락 예정일이 없는 현장입니다. 오래된 갱신일과 높은 중요도를 우선 표시합니다.'});
+ }catch(e){res.status(500).json({error:'연락 일정 미등록 현장 조회 실패'});}
+});
+
 app.get('/api/permits/sales-stagnation',loadUser,async(req,res)=>{
  try{
   const days=Number.parseInt(req.query.days,10)||14;
