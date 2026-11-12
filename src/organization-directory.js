@@ -86,6 +86,11 @@ function createDirectorySync({query,transaction,env=process.env,request=json}){
  async function run(){
   if(active||env.AUTO_INGEST_ENABLED==='false')return;active=true;
   try{for(const source of Object.keys(SOURCES)){
+   // Keep the secret out of operational status; persist only a one-way change marker.
+   const key=source==='architects'?env.ARCHITECT_DIRECTORY_KEY:env.DEVELOPER_DIRECTORY_KEY;
+   const revision=digest(source+':'+(key||'public-or-unconfigured'));
+   await query(`UPDATE directory_sync_state SET config_revision=$2,next_due_at=NOW(),last_error=NULL
+    WHERE source=$1 AND config_revision IS DISTINCT FROM $2 AND (lease_until IS NULL OR lease_until<NOW())`,[source,revision]);
    const token=crypto.randomUUID();const claim=await query(`UPDATE directory_sync_state SET lease_token=$2,lease_until=NOW()+INTERVAL '20 minutes',last_attempt_at=NOW() WHERE source=$1 AND next_due_at<=NOW() AND (lease_until IS NULL OR lease_until<NOW()) RETURNING source`,[source,token]);if(!claim.rows.length)continue;
    try{
     const raw=await (source==='architects'?fetchArchitects(env,request):fetchDevelopers(env,request));

@@ -146,6 +146,7 @@ async function initDb() {
       source TEXT PRIMARY KEY,next_due_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),last_attempt_at TIMESTAMPTZ,last_success_at TIMESTAMPTZ,
       lease_token TEXT,lease_until TIMESTAMPTZ,last_error TEXT,record_count INTEGER NOT NULL DEFAULT 0
     );
+    ALTER TABLE directory_sync_state ADD COLUMN IF NOT EXISTS config_revision TEXT;
     INSERT INTO directory_sync_state(source) VALUES('architects'),('busan_developers') ON CONFLICT DO NOTHING;
     CREATE TABLE IF NOT EXISTS party_contact_decisions (
       id BIGSERIAL PRIMARY KEY,evidence_id BIGINT NOT NULL REFERENCES project_party_evidence(id) ON DELETE CASCADE,
