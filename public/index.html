@@ -36,7 +36,7 @@
   <div class="panel" style="display:flex;gap:10px;margin-bottom:16px"><button class="button primary" type="button" data-search-tab="groups">통합 프로젝트</button><button class="button light" type="button" data-search-tab="projects">개별 입찰공고·연락처</button></div>
   <div class="section-head"><div><h3>통합 건설 프로젝트</h3><p>동일 발주기관·위치·사업명으로 확인된 공종별 입찰공고를 묶어 표시합니다.</p></div></div>
   <div class="panel filters">
-    <label>프로젝트명·발주처<input id="groupQ" placeholder="프로젝트명 또는 발주처"></label>
+    <label>프로젝트명·발주처<input id="groupQ" placeholder="프로젝트명, 발주처 또는 인허가·착공·준공"></label>
     <label>지역<input id="groupRegion" placeholder="예: 경기도"></label>
     <label>공종<select id="groupTrade"><option value="">전체 공종</option><option>건축</option><option>전기</option><option>통신</option><option>소방</option><option>기계설비</option></select></label>
     <button class="button primary" id="groupSearchBtn">검색</button>
@@ -49,7 +49,7 @@
 <section id="projects" class="page">
   <div class="panel" style="display:flex;gap:10px;margin-bottom:16px"><button class="button light" type="button" data-search-tab="groups">통합 프로젝트</button><button class="button primary" type="button" data-search-tab="projects">개별 입찰공고·연락처</button></div>
   <div class="panel filters">
-    <label>기간 기준<select id="dateField"><option value="event">허가일·착공일·공고일</option><option value="collected">시스템 등록일</option></select></label><label>조회 기간<select id="searchPeriod"><option value="">전체 기간</option><option value="7">최근 7일</option><option value="30">최근 30일</option><option value="90">최근 3개월</option><option value="365">최근 1년</option><option value="custom">직접 지정</option></select></label><label id="searchFromWrap" hidden>시작일<input id="searchFrom" type="date"></label><label id="searchToWrap" hidden>종료일<input id="searchTo" type="date"></label><label>키워드<input id="q" placeholder="프로젝트명, 공고명, 발주처, 담당자 검색"></label>
+    <label>기간 기준<select id="dateField"><option value="event">허가일·착공일·준공일·공고일</option><option value="collected">시스템 등록일</option></select></label><label>조회 기간<select id="searchPeriod"><option value="">전체 기간</option><option value="7">최근 7일</option><option value="30">최근 30일</option><option value="90">최근 3개월</option><option value="365">최근 1년</option><option value="custom">직접 지정</option></select></label><label id="searchFromWrap" hidden>시작일<input id="searchFrom" type="date"></label><label id="searchToWrap" hidden>종료일<input id="searchTo" type="date"></label><label>키워드<input id="q" placeholder="프로젝트명, 발주처 또는 인허가·착공·준공"></label>
     <label>지역<select id="region"><option value="">전국 전체</option><option>서울특별시</option><option>경기도</option><option>인천광역시</option><option>부산광역시</option><option>대전광역시</option><option>제주특별자치도</option></select></label>
     <label>진행 단계<select id="stage"><option value="">전체 단계</option><option value="PERMIT">인허가</option><option value="STARTED">착공</option><option value="COMPLETED">준공</option><option value="BID">입찰</option></select></label>
     <label>건물 용도<input id="type" placeholder="예: 숙박시설"></label>
