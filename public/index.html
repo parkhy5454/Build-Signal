@@ -10,7 +10,7 @@
   <div class="brand"><div class="brand-mark">BS</div><div><b>BUILD SIGNAL</b><small>Construction Intelligence</small></div></div>
   <nav>
     <a class="active" href="#dashboard" data-page="dashboard">▦ 대시보드</a>
-    <a href="#groups" data-page="groups">⌕ 건설 프로젝트 통합 검색</a>
+    <a href="#projects" data-page="projects">⌕ 건설 프로젝트 통합 검색</a>
     <a href="#recommend" data-page="recommend">✦ AI 영업 추천</a>
     <a href="#favorites" data-page="favorites">☆ 관심 현장</a>
   </nav>
@@ -34,10 +34,10 @@
   <div class="notice" id="demoNotice" hidden>ⓘ 데모 데이터가 포함되어 있습니다. 실제 공고와 구분해 확인하세요.</div>
 </section>
 <section id="groups" class="page">
-  <div class="panel" style="display:flex;gap:10px;margin-bottom:16px"><button class="button primary" type="button" data-search-tab="groups">통합 프로젝트</button><button class="button light" type="button" data-search-tab="projects">개별 입찰공고·연락처</button></div>
+  <div class="panel" style="display:flex;gap:10px;margin-bottom:16px"><button class="button primary" type="button" data-search-tab="groups">입찰공고 통합보기</button><button class="button light" type="button" data-search-tab="projects">현장·초기 사업</button></div>
   <div class="section-head"><div><h3>통합 건설 프로젝트</h3><p>동일 발주기관·위치·사업명으로 확인된 공종별 입찰공고를 묶어 표시합니다.</p></div></div>
   <div class="panel filters">
-    <label>프로젝트명·발주처<input id="groupQ" placeholder="프로젝트명, 발주처 또는 인허가·착공·준공"></label>
+    <label>프로젝트명·발주처<input id="groupQ" placeholder="프로젝트명, 업체명 또는 심의·인허가·착공·준공"></label>
     <label>지역<select id="groupRegion"><option value="">전체 지역</option><option value="서울특별시">서울</option><option value="전남광주통합특별시">전남광주통합특별시</option><option value="부산광역시">부산</option><option value="대구광역시">대구</option><option value="인천광역시">인천</option><option value="대전광역시">대전</option><option value="울산광역시">울산</option><option value="경기도">경기</option><option value="충청북도">충북</option><option value="충청남도">충남</option><option value="경상북도">경북</option><option value="경상남도">경남</option><option value="제주특별자치도">제주</option><option value="강원특별자치도">강원</option><option value="전북특별자치도">전북</option><option value="광주광역시">광주 (기존 자료)</option><option value="세종특별자치시">세종 (기존 자료)</option><option value="전라남도">전남 (기존 자료)</option></select></label>
     <label>공종<select id="groupTrade"><option value="">전체 공종</option><option>건축</option><option>전기</option><option>통신</option><option>소방</option><option>기계설비</option></select></label>
     <button class="button primary" id="groupSearchBtn">검색</button>
@@ -48,16 +48,16 @@
   <div class="notice">ⓘ 보수적인 자동 매칭으로 연결된 공고만 표시합니다. 원본 공고는 위 ‘개별 입찰공고·연락처’ 탭에서 모두 확인할 수 있습니다.</div>
 </section>
 <section id="projects" class="page">
-  <div class="panel" style="display:flex;gap:10px;margin-bottom:16px"><button class="button light" type="button" data-search-tab="groups">통합 프로젝트</button><button class="button primary" type="button" data-search-tab="projects">개별 입찰공고·연락처</button></div>
+  <div class="panel" style="display:flex;gap:10px;margin-bottom:16px"><button class="button light" type="button" data-search-tab="groups">입찰공고 통합보기</button><button class="button primary" type="button" data-search-tab="projects">현장·초기 사업</button></div>
   <div class="panel filters">
-    <label>기간 기준<select id="dateField"><option value="event">허가일·착공일·준공일·공고일</option><option value="collected">시스템 등록일</option></select></label><label>조회 기간<select id="searchPeriod"><option value="">전체 기간</option><option value="7">최근 7일</option><option value="30">최근 30일</option><option value="90">최근 3개월</option><option value="365">최근 1년</option><option value="custom">직접 지정</option></select></label><label id="searchFromWrap" hidden>시작일<input id="searchFrom" type="date"></label><label id="searchToWrap" hidden>종료일<input id="searchTo" type="date"></label><label>키워드<input id="q" placeholder="프로젝트명, 발주처 또는 인허가·착공·준공"></label>
+    <label>기간 기준<select id="dateField"><option value="event">허가일·착공일·준공일·공고일</option><option value="collected">시스템 등록일</option></select></label><label>조회 기간<select id="searchPeriod"><option value="">전체 기간</option><option value="7">최근 7일</option><option value="30">최근 30일</option><option value="90">최근 3개월</option><option value="365">최근 1년</option><option value="custom">직접 지정</option></select></label><label id="searchFromWrap" hidden>시작일<input id="searchFrom" type="date"></label><label id="searchToWrap" hidden>종료일<input id="searchTo" type="date"></label><label>키워드<input id="q" placeholder="프로젝트명, 업체명 또는 심의·인허가·착공·준공"></label>
     <label>지역<select id="region"><option value="">전체 지역</option><option value="서울특별시">서울</option><option value="전남광주통합특별시">전남광주통합특별시</option><option value="부산광역시">부산</option><option value="대구광역시">대구</option><option value="인천광역시">인천</option><option value="대전광역시">대전</option><option value="울산광역시">울산</option><option value="경기도">경기</option><option value="충청북도">충북</option><option value="충청남도">충남</option><option value="경상북도">경북</option><option value="경상남도">경남</option><option value="제주특별자치도">제주</option><option value="강원특별자치도">강원</option><option value="전북특별자치도">전북</option><option value="광주광역시">광주 (기존 자료)</option><option value="세종특별자치시">세종 (기존 자료)</option><option value="전라남도">전남 (기존 자료)</option></select></label>
-    <label>진행 단계<select id="stage"><option value="">전체 단계</option><option value="PERMIT">인허가</option><option value="STARTED">착공</option><option value="COMPLETED">준공</option><option value="BID">입찰</option></select></label>
+    <label>진행 단계<select id="stage"><option value="">전체 단계</option><option value="REVIEW">심의</option><option value="PERMIT">인허가</option><option value="STARTED">착공</option><option value="COMPLETED">준공</option><option value="BID">입찰</option></select></label>
     <label>건물 용도<input id="type" placeholder="예: 숙박시설"></label>
-    <label>연락처 확보<select id="contactFilter"><option value="">전체 프로젝트</option><option value="any">연락처 확보 현장</option><option value="client">발주처</option><option value="designer">설계사</option><option value="supervisor">감리사</option><option value="contractor">시공사</option></select></label>
+    <label>연락처 확보<select id="contactFilter"><option value="">전체 프로젝트</option><option value="any">연락처 확보 현장</option><option value="client">발주기관</option><option value="owner">건축주</option><option value="developer">시행사</option><option value="applicant">심의 신청인</option><option value="designer">설계사</option><option value="supervisor">감리사</option><option value="contractor">시공사</option></select></label>
     <button class="button primary" id="searchBtn">검색</button>
   </div>
-  <div class="section-head"><div><h3>전국 건설현장</h3><p id="resultCount">검색 결과</p></div><a class="button light" href="/api/export.csv">CSV 다운로드</a></div>
+  <div class="section-head"><div><h3>전국 현장·초기 사업</h3><p id="resultCount">검색 결과</p></div><a class="button light" href="/api/export.csv">CSV 다운로드</a></div>
   <div id="projectResults" class="project-list"></div>
   <div class="pagination"><button class="button light" id="prevPage">← 이전</button><span id="pageInfo">1 / 1</span><button class="button light" id="nextPage">다음 →</button></div>
 </section>
