@@ -47,6 +47,9 @@ async function initDb() {
     ALTER TABLE permit_region_queues ADD COLUMN IF NOT EXISTS last_error TEXT;
     ALTER TABLE permit_region_queues ADD COLUMN IF NOT EXISTS failed_region TEXT;
     ALTER TABLE permit_region_queues ADD COLUMN IF NOT EXISTS failed_at TIMESTAMPTZ;
+    ALTER TABLE permit_region_queues ADD COLUMN IF NOT EXISTS next_region INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE permit_region_queues ADD COLUMN IF NOT EXISTS run_start_date CHAR(8);
+    ALTER TABLE permit_region_queues ADD COLUMN IF NOT EXISTS run_end_date CHAR(8);
     CREATE TABLE IF NOT EXISTS permit_legal_dong_codes (
       code CHAR(10) PRIMARY KEY,
       name TEXT NOT NULL,
