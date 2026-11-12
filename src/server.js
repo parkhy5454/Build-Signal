@@ -688,10 +688,11 @@ app.get('/api/admin/permits/regional-leads',loadUser,requireAdminRole,async(req,
   if(!region||region.length>100)return res.status(400).json({error:'지역명을 1~100자로 입력하세요.'});
   const profile=profiles[req.query.profile]?req.query.profile:'automation';
   const limit=Math.min(100,Math.max(1,Number.parseInt(req.query.limit,10)||30));
-  const result=await query(`SELECT p.*, (SELECT COUNT(*)::int FROM project_contacts c WHERE c.project_id=p.id) AS contact_count
+  const result=await query(`SELECT p.*, (SELECT COUNT(*)::int FROM project_contacts c WHERE c.project_id=p.id) AS contact_count,
+   (SELECT sp.status FROM sales_pipeline sp WHERE sp.project_id=p.id AND sp.user_key=$2) AS pipeline_status
    FROM projects p WHERE p.source='arch_hub_permit'
    AND COALESCE(NULLIF(BTRIM(p.region),''),'지역 미확인')=$1
-   ORDER BY p.updated_at DESC LIMIT 2000`,[region]);
+   ORDER BY p.updated_at DESC LIMIT 2000`,[region,String(req.user.id)]);
   const now=Date.now();
   const rows=result.rows.map(p=>{
    const base=scoreProject(p,profile);
@@ -706,7 +707,7 @@ app.get('/api/admin/permits/regional-leads',loadUser,requireAdminRole,async(req,
    if(base>=50)reasons.push('업종·규모 적합');
    if(Number(p.contact_count)>0)reasons.push('연락처 등록');
    return {id:p.id,name:p.name,address:p.address,region:p.region,buildingType:p.building_type,
-    stage:p.stage,permitDate:p.permit_date,areaSqm:p.area_sqm,contactCount:p.contact_count,score,reasons};
+    stage:p.stage,permitDate:p.permit_date,areaSqm:p.area_sqm,contactCount:p.contact_count,pipelineStatus:p.pipeline_status||null,score,reasons};
   }).sort((a,b)=>b.score-a.score||(new Date(b.permitDate||0)-new Date(a.permitDate||0))).slice(0,limit);
   res.json({region,profile:profiles[profile].label,rows,scanned:result.rows.length,
    note:'선택 지역의 최근 갱신 2,000건 중 휴리스틱 우선순위입니다. 실제 수주 가능성이나 해당 지역 전체 현장 순위를 보장하지 않습니다.'});
