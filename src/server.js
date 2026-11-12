@@ -485,6 +485,7 @@ app.post('/api/admin/permits/region-queues/:id/run-next',loadUser,requireAdminRo
  if(!/^\d+$/.test(req.params.id))return res.status(400).json({error:'잘못된 목록 ID'});
  const {startDate,endDate}=req.body||{};
  if(!permitDate(startDate)||!permitDate(endDate)||startDate>endDate||Date.parse(permitDate(endDate))-Date.parse(permitDate(startDate))>29*86400000)return res.status(400).json({error:'수집 기간은 최대 30일이어야 합니다.'});
+ const runToken=crypto.randomUUID();
  let queue;
  try{
   const result=await query("SELECT id,regions,next_batch,status FROM permit_region_queues WHERE id=$1",[req.params.id]);
@@ -495,7 +496,7 @@ app.post('/api/admin/permits/region-queues/:id/run-next',loadUser,requireAdminRo
   if(!locked.rows.length)return res.status(409).json({error:'수집 목록 상태를 확인하세요.'});
  }catch(e){return res.status(500).json({error:'수집 목록 준비 실패'});}
  const regions=queue.regions.slice(queue.next_batch*20,(queue.next_batch+1)*20);
- permitJob={status:'running',queueId:queue.id,batchNumber:queue.next_batch+1,regionCount:regions.length,completedRegions:0,received:0,inserted:0,updated:0,skipped:0,pages:0,total:0,startedAt:new Date().toISOString()};
+ permitJob={status:'running',queueId:queue.id,runToken,batchNumber:queue.next_batch+1,regionCount:regions.length,completedRegions:0,received:0,inserted:0,updated:0,skipped:0,pages:0,total:0,startedAt:new Date().toISOString()};
  const job=permitJob;
  // Refresh the persisted lease timestamp while a region's API pages are in flight.
  // A stale recovery may only run after 60 minutes without this heartbeat.
@@ -513,6 +514,8 @@ app.post('/api/admin/permits/region-queues/:id/run-next',loadUser,requireAdminRo
    await savePermitJob(job);
    for(const region of regions){
     const child={status:'running',received:0,inserted:0,updated:0,skipped:0,pages:0,total:0,startedAt:new Date().toISOString()};
+    const owner=await query("SELECT 1 FROM permit_region_queues WHERE id=$1 AND next_batch=$2 AND status='running' AND run_token=$3",[queue.id,queue.next_batch,runToken]);
+    if(!owner.rows.length)throw Error('작업 실행 권한이 만료되었습니다.');
     await permitSync(child,{sigunguCd:region.sigunguCd,bjdongCd:region.bjdongCd,startDate,endDate});
     for(const key of ['received','inserted','updated','skipped','pages'])job[key]+=child[key];
     if(child.status!=='completed')throw Error(region.name+': '+(child.error||'수집 실패'));
@@ -520,12 +523,12 @@ app.post('/api/admin/permits/region-queues/:id/run-next',loadUser,requireAdminRo
     await query("UPDATE permit_region_queues SET updated_at=NOW() WHERE id=$1 AND next_batch=$2 AND status='running'",[queue.id,queue.next_batch]);
     await savePermitJob(job);
    }
-   const advanced=await query("UPDATE permit_region_queues SET next_batch=next_batch+1,status=CASE WHEN (next_batch+1)*20>=jsonb_array_length(regions) THEN 'completed' ELSE 'prepared' END,updated_at=NOW() WHERE id=$1 AND next_batch=$2 RETURNING next_batch",[queue.id,queue.next_batch]);
+   const advanced=await query("UPDATE permit_region_queues SET next_batch=next_batch+1,run_token=NULL,status=CASE WHEN (next_batch+1)*20>=jsonb_array_length(regions) THEN 'completed' ELSE 'prepared' END,updated_at=NOW() WHERE id=$1 AND next_batch=$2 RETURNING next_batch",[queue.id,queue.next_batch]);
    if(!advanced.rows.length)throw Error('완료 위치 저장 충돌');
    job.status='completed';
   }catch(e){
    job.status='failed';job.error=String(e.message).slice(0,200);
-   await query("UPDATE permit_region_queues SET status='failed',updated_at=NOW() WHERE id=$1 AND next_batch=$2 AND status='running'",[queue.id,queue.next_batch]).catch(()=>{});
+   await query("UPDATE permit_region_queues SET status='failed',run_token=NULL,updated_at=NOW() WHERE id=$1 AND next_batch=$2 AND status='running'",[queue.id,queue.next_batch]).catch(()=>{});
   }finally{clearInterval(heartbeat);job.finishedAt=new Date().toISOString();await savePermitJob(job).catch(()=>{});}
  })();
  res.status(202).json({job});
@@ -536,7 +539,7 @@ app.post('/api/admin/permits/region-queues/:id/recover-stale',loadUser,requireAd
  if(!/^\d+$/.test(req.params.id))return res.status(400).json({error:'잘못된 목록 ID'});
  if(permitJob?.status==='running'&&String(permitJob.queueId)===req.params.id)return res.status(409).json({error:'현재 서버에서 수집 중이므로 복구할 수 없습니다.'});
  try{
-  const r=await query("UPDATE permit_region_queues SET status='failed',updated_at=NOW() WHERE id=$1 AND status='running' AND updated_at < NOW()-INTERVAL '60 minutes' RETURNING id,next_batch AS \"nextBatch\"",[req.params.id]);
+  const r=await query("UPDATE permit_region_queues SET status='failed',run_token=NULL,updated_at=NOW() WHERE id=$1 AND status='running' AND updated_at < NOW()-INTERVAL '60 minutes' RETURNING id,next_batch AS \"nextBatch\"",[req.params.id]);
   if(!r.rows.length)return res.status(409).json({error:'중단된 작업이 없거나 마지막 시작 후 60분이 지나지 않았습니다.'});
   res.json({queue:r.rows[0],message:'중단된 작업을 재시도 가능 상태로 변경했습니다. 완료 위치는 유지됩니다.'});
  }catch(e){res.status(500).json({error:'중단 작업 복구 실패'});}
