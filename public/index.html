@@ -49,7 +49,7 @@
 <section id="projects" class="page">
   <div class="panel" style="display:flex;gap:10px;margin-bottom:16px"><button class="button light" type="button" data-search-tab="groups">통합 프로젝트</button><button class="button primary" type="button" data-search-tab="projects">개별 입찰공고·연락처</button></div>
   <div class="panel filters">
-    <label>키워드<input id="q" placeholder="프로젝트명, 공고명, 발주처, 담당자 검색"></label>
+    <label>기간 기준<select id="dateField"><option value="event">허가일·착공일·공고일</option><option value="collected">시스템 등록일</option></select></label><label>조회 기간<select id="searchPeriod"><option value="">전체 기간</option><option value="7">최근 7일</option><option value="30">최근 30일</option><option value="90">최근 3개월</option><option value="365">최근 1년</option><option value="custom">직접 지정</option></select></label><label id="searchFromWrap" hidden>시작일<input id="searchFrom" type="date"></label><label id="searchToWrap" hidden>종료일<input id="searchTo" type="date"></label><label>키워드<input id="q" placeholder="프로젝트명, 공고명, 발주처, 담당자 검색"></label>
     <label>지역<select id="region"><option value="">전국 전체</option><option>서울특별시</option><option>경기도</option><option>인천광역시</option><option>부산광역시</option><option>대전광역시</option><option>제주특별자치도</option></select></label>
     <label>진행 단계<select id="stage"><option value="">전체 단계</option><option value="PERMIT">인허가</option><option value="STARTED">착공</option><option value="COMPLETED">준공</option><option value="BID">입찰</option></select></label>
     <label>건물 용도<input id="type" placeholder="예: 숙박시설"></label>

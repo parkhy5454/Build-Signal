@@ -18,7 +18,12 @@ async function contactSummary(){
 async function dashboard(){try{const d=await api("/api/dashboard");$("total").textContent=fmt(d.total);const m=Object.fromEntries(d.byStage.map(x=>[x.stage,x.n]));$("permit").textContent=fmt(m.PERMIT);$("started").textContent=fmt(m.STARTED);$("favoritesCount").textContent=fmt(d.favorites);$("demoNotice").hidden=!d.demo;contactSummary();$("recent").innerHTML=d.recent.length?d.recent.map(p=>card(p)).join(""):'<div class="panel">등록된 현장이 없습니다. 실제 데이터 또는 데모 데이터를 적재해 주세요.</div>'; }catch(e){$("recent").innerHTML=`<div class="notice">${esc(e.message)}</div>`;}}
 async function search(page=1){
  searchPage=Math.max(1,page);
- const params=new URLSearchParams({q:$("q").value,region:$("region").value,stage:$("stage").value,type:$("type").value,contact:$("contactFilter").value,page:String(searchPage),limit:"30"});
+ const period=$("searchPeriod").value;
+ const today=new Date();const localDay=d=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+ const fromDate=new Date(today.getFullYear(),today.getMonth(),today.getDate()-(Number(period)||0)+1);
+ const from=period==="custom"?$("searchFrom").value:period?localDay(fromDate):"";
+ const to=period==="custom"?$("searchTo").value:period?localDay(today):"";
+ const params=new URLSearchParams({dateField:$("dateField").value,from,to,q:$("q").value,region:$("region").value,stage:$("stage").value,type:$("type").value,contact:$("contactFilter").value,page:String(searchPage),limit:"30"});
  try{
   const d=await api("/api/projects?"+params);
   searchTotalPages=Math.max(1,d.pages||1);
@@ -93,6 +98,8 @@ document.querySelectorAll("[data-page],[data-go]").forEach(a=>a.addEventListener
 $('groupSearchBtn').onclick=()=>groups(1);
 $('groupPrev').onclick=()=>{if(groupPage>1)groups(groupPage-1);};
 $('groupNext').onclick=()=>{if(groupPage<groupPages)groups(groupPage+1);};
+$("searchPeriod").onchange=()=>{const custom=$("searchPeriod").value==="custom";$("searchFromWrap").hidden=!custom;$("searchToWrap").hidden=!custom;search(1);};
+$("dateField").onchange=()=>search(1);
 $("searchBtn").onclick=()=>search(1);
 $("prevPage").onclick=()=>{if(searchPage>1)search(searchPage-1);};
 $("nextPage").onclick=()=>{if(searchPage<searchTotalPages)search(searchPage+1);};$("recommendBtn").onclick=recommendations;$("closeModal").onclick=()=>$("modal").classList.add("hidden");$("modal").onclick=e=>{if(e.target===$("modal"))$("modal").classList.add("hidden");};
