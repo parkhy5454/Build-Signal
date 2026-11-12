@@ -37,6 +37,42 @@ function safeEqual(a, b) {
   return aa.length === bb.length && crypto.timingSafeEqual(aa, bb);
 }
 function normalizeDate(v) { return v ? String(v).slice(0, 10) : null; }
+function normalizeG2bDate(v) {
+  if (!v) return null;
+  const s = String(v).replace(/\D/g, "");
+  if (s.length < 8) return null;
+  return `${s.slice(0,4)}-${s.slice(4,6)}-${s.slice(6,8)}`;
+}
+function firstValue(obj, keys) {
+  for (const k of keys) {
+    const v = obj?.[k];
+    if (v !== undefined && v !== null && String(v).trim() !== "") return String(v).trim();
+  }
+  return null;
+}
+function classifyBid(title) {
+  const t = String(title || "").toLowerCase();
+  if (/자동제어|빌딩자동제어|건물자동제어|bms|스마트빌딩/.test(t)) return "자동제어·스마트빌딩";
+  if (/소방|전기공사|전기설비|통신공사|정보통신/.test(t)) return "전기·통신·소방";
+  if (/공조|냉난방|기계설비|환기|에어컨|hvac/.test(t)) return "조명·공조·HVAC";
+  if (/조명|led|등기구/.test(t)) return "조명·공조·HVAC";
+  if (/건축자재|창호|도어|배관|밸브|펌프|승강기/.test(t)) return "건축자재·설비";
+  return "건설공사";
+}
+function parseG2bItems(payload) {
+  const body = payload?.response || payload?.Response || payload;
+  const header = body?.header || body?.Header;
+  const resultCode = String(header?.resultCode ?? header?.RESULTCODE ?? "00");
+  const resultMsg = String(header?.resultMsg ?? header?.RESULTMSG ?? "");
+  if (resultCode !== "00" && resultCode !== "0") {
+    throw new Error(`나라장터 API 오류(${resultCode}): ${resultMsg || "응답 오류"}`);
+  }
+  const raw = body?.body || body?.Body || {};
+  const items = raw?.items?.item ?? raw?.items?.Item ?? raw?.items ?? [];
+  if (Array.isArray(items)) return items;
+  return items ? [items] : [];
+}
+
 
 async function loadUser(req, res, next) {
   if (!req.session.userId) return res.status(401).json({ error: "로그인이 필요합니다.", code: "LOGIN_REQUIRED" });
@@ -92,6 +128,74 @@ app.get("/api/health", async (req, res) => {
   try { await query("SELECT 1"); res.json({ ok: true, app: "BUILD SIGNAL", database: "connected" }); }
   catch (e) { res.status(503).json({ ok: false, error: e.message }); }
 });
+
+// 나라장터 공사 입찰공고 수집: 관리자만 실행 가능. 조회기간은 최신 API 정책에 맞춰 최대 7일로 제한.
+app.post("/api/admin/g2b/sync", loadUser, requireAdminRole, async (req, res) => {
+  const serviceKey = process.env.G2B_SERVICE_KEY;
+  if (!serviceKey) return res.status(400).json({ error: "Render 환경변수 G2B_SERVICE_KEY가 설정되지 않았습니다." });
+  const days = Math.min(7, Math.max(1, Number(req.body.days) || 7));
+  const end = new Date();
+  const start = new Date(end.getTime() - days * 24 * 60 * 60 * 1000);
+  const fmt = d => d.getFullYear() + String(d.getMonth()+1).padStart(2,"0") + String(d.getDate()).padStart(2,"0") + String(d.getHours()).padStart(2,"0") + String(d.getMinutes()).padStart(2,"0");
+  const params = new URLSearchParams({
+    serviceKey,
+    pageNo: "1",
+    numOfRows: "100",
+    inqryDiv: "1",
+    inqryBgnDt: fmt(start),
+    inqryEndDt: fmt(end),
+    type: "json"
+  });
+  const endpoint = "https://apis.data.go.kr/1230000/ad/BidPublicInfoService/getBidPblancListInfoCnstwk";
+  try {
+    const response = await fetch(`${endpoint}?${params.toString()}`, { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(25000) });
+    const rawText = await response.text();
+    let payload;
+    try { payload = JSON.parse(rawText); }
+    catch { throw new Error(`나라장터 응답을 JSON으로 해석하지 못했습니다(HTTP ${response.status}). API 명세의 응답 형식을 확인해 주세요.`); }
+    if (!response.ok) throw new Error(`나라장터 HTTP 오류: ${response.status}`);
+    const items = parseG2bItems(payload);
+    let inserted = 0, updated = 0, skipped = 0;
+    for (const item of items) {
+      const bidNo = firstValue(item, ["bidNtceNo","BIDNTCENO"]);
+      const bidOrd = firstValue(item, ["bidNtceOrd","BIDNTCEORD"]) || "00";
+      const title = firstValue(item, ["bidNtceNm","BIDNTCENM","bidNtceNmPrt"]) ;
+      if (!bidNo || !title) { skipped++; continue; }
+      const externalId = `${bidNo}-${bidOrd}`;
+      const agency = firstValue(item, ["ntceInsttNm","NTCEINSTTNM","dminsttNm","DMINSTTNM"]);
+      const demandAgency = firstValue(item, ["dminsttNm","DMINSTTNM"]);
+      const location = firstValue(item, ["cnstrtsiteRgnNm","CNSTRTSITERGNM","prtcptLmtRgnNm","PRTCPTLMTRGNM"]);
+      const noticeDate = normalizeG2bDate(firstValue(item, ["bidNtceDt","BIDNTCEDT","rgstDt","RGSTDT"]));
+      const closeDate = normalizeG2bDate(firstValue(item, ["bidClseDt","BIDCLSEDT"]));
+      const sourceUrl = firstValue(item, ["bidNtceDtlUrl","BIDNTCEDTLURL","ntceDtlUrl","NTCEDTLURL"]);
+      const estimated = firstValue(item, ["presmptPrce","PRESMPTPRCE","asignBdgtAmt","ASIGNBDGTAMT"]);
+      const region = location ? location.split(/\s+/)[0] : null;
+      const district = location && location.split(/\s+/).length > 1 ? location.split(/\s+/).slice(1).join(" ") : null;
+      const vals = ["g2b_bid", externalId, title, location, region, district, classifyBid(title), "BID",
+        noticeDate, null, closeDate, null, null, null, estimated ? Number(estimated.replace(/,/g,"")) || null : null,
+        demandAgency || agency, null, null, agency, sourceUrl, noticeDate];
+      const r = await query(`INSERT INTO projects(source,external_id,name,address,region,district,building_type,stage,permit_date,start_date,completion_date,floors_above,floors_below,area_sqm,estimated_cost,owner,designer,supervisor,contractor,source_url,source_updated_at)
+        VALUES(${vals.map((_,i)=>`$${i+1}`).join(",")})
+        ON CONFLICT(source,external_id) DO UPDATE SET name=EXCLUDED.name,address=EXCLUDED.address,region=EXCLUDED.region,district=EXCLUDED.district,building_type=EXCLUDED.building_type,stage='BID',completion_date=EXCLUDED.completion_date,estimated_cost=EXCLUDED.estimated_cost,owner=EXCLUDED.owner,contractor=EXCLUDED.contractor,source_url=EXCLUDED.source_url,source_updated_at=EXCLUDED.source_updated_at,updated_at=NOW()
+        RETURNING (xmax = 0) AS inserted`, vals);
+      if (r.rows[0]?.inserted) inserted++; else updated++;
+    }
+    await query("INSERT INTO ingest_logs(source,received_count,inserted_count,status,message) VALUES($1,$2,$3,'SUCCESS',$4)",
+      ["g2b_bid", items.length, inserted, `Updated ${updated}; skipped ${skipped}; range ${fmt(start)}-${fmt(end)}`]);
+    res.json({ ok: true, received: items.length, inserted, updated, skipped, range: { from: fmt(start), to: fmt(end) }, note: "공사 입찰공고 1페이지(최대 100건)를 수집했습니다. 추가 페이지는 다음 버전에서 이어받도록 확장할 수 있습니다." });
+  } catch (e) {
+    await query("INSERT INTO ingest_logs(source,received_count,inserted_count,status,message) VALUES($1,0,0,'ERROR',$2)", ["g2b_bid", String(e.message).slice(0,1000)]).catch(()=>{});
+    res.status(502).json({ error: e.message });
+  }
+});
+app.get("/api/admin/g2b/status", loadUser, requireAdminRole, async (req,res) => {
+  try {
+    const r = await query("SELECT COUNT(*)::int AS total, MAX(updated_at) AS last_sync FROM projects WHERE source='g2b_bid'");
+    const log = await query("SELECT status,message,created_at FROM ingest_logs WHERE source='g2b_bid' ORDER BY created_at DESC LIMIT 1");
+    res.json({ ...r.rows[0], lastLog: log.rows[0] || null, configured: !!process.env.G2B_SERVICE_KEY });
+  } catch(e) { res.status(500).json({error:e.message}); }
+});
+
 
 app.get("/api/dashboard", async (req, res) => {
   try {

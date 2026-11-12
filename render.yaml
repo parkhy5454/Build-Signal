@@ -19,6 +19,8 @@ services:
         sync: false
       - key: SESSION_SECRET
         generateValue: true
+      - key: G2B_SERVICE_KEY
+        sync: false
       - key: DATA_SOURCE_MODE
         value: demo
       - key: PORT
