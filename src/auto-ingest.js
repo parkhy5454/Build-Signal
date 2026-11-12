@@ -52,7 +52,8 @@ function createAutoIngest({query,permit,bids,busy,env=process.env}){
   try{
    const outcome=await work({state:claim.rows[0],reserve,checkpoint,assertOwner,token});
    const delay=typeof outcome==='number'?outcome:outcome.delay,processed=typeof outcome==='number'?true:outcome.processed;
-   await query(`UPDATE auto_ingest_state SET last_success_at=CASE WHEN $4 THEN NOW() ELSE last_success_at END,last_error=NULL,lease_token=NULL,lease_until=NULL,next_due_at=NOW()+($3::int*INTERVAL '1 second') WHERE source=$1 AND lease_token=$2`,[source,token,delay,processed]);
+   const warning=typeof outcome==='number'?null:outcome.warning||null;
+   await query(`UPDATE auto_ingest_state SET last_success_at=CASE WHEN $4 THEN NOW() ELSE last_success_at END,last_error=$5,lease_token=NULL,lease_until=NULL,next_due_at=NOW()+($3::int*INTERVAL '1 second') WHERE source=$1 AND lease_token=$2`,[source,token,delay,processed,warning]);
   }catch(e){
    await query(`UPDATE auto_ingest_state SET last_error=$3,lease_token=NULL,lease_until=NULL,next_due_at=NOW()+INTERVAL '30 minutes' WHERE source=$1 AND lease_token=$2`,[source,token,String(e.message).slice(0,300)]);
   }finally{clearInterval(beat);}
@@ -67,17 +68,31 @@ function createAutoIngest({query,permit,bids,busy,env=process.env}){
     return range.end.getTime()<Date.now()-3600000?60:86400;
    });
    if(env.ARCH_HUB_SERVICE_KEY&&!busy('permits'))await leased('permits',async({reserve,token,assertOwner})=>{
-    const pages=limit(env.AUTO_PERMIT_PAGES_PER_TICK,5,20);let handled=0;
+    const pages=limit(env.AUTO_PERMIT_PAGES_PER_TICK,5,20);let handled=0;const failures=[];
     for(let i=0;i<pages;i++){
-     const result=await query(`SELECT * FROM auto_permit_regions WHERE enabled=TRUE AND next_due_at<=NOW()
-      ORDER BY next_due_at,last_attempt_at NULLS FIRST,sigungu_cd,bjdong_cd LIMIT 1`);
+     // Rotate provinces before choosing the oldest due district/page within each province.
+     // No province must wait for all pages of another province's initial national load.
+     const result=await query(`WITH province_rotation AS (
+      SELECT LEFT(sigungu_cd,2) AS province,MAX(last_attempt_at) AS province_last_attempt
+      FROM auto_permit_regions WHERE enabled=TRUE GROUP BY LEFT(sigungu_cd,2)
+     ) SELECT r.* FROM auto_permit_regions r JOIN province_rotation p ON p.province=LEFT(r.sigungu_cd,2)
+      WHERE r.enabled=TRUE AND r.next_due_at<=NOW()
+      ORDER BY p.province_last_attempt NULLS FIRST,r.next_due_at,r.last_attempt_at NULLS FIRST,r.sigungu_cd,r.bjdong_cd LIMIT 1`);
      const region=result.rows[0];if(!region)break;
-     const job=await permit({sigunguCd:region.sigungu_cd,bjdongCd:region.bjdong_cd,startPage:region.next_page,pageBudget:1,beforePage:reserve,automatic:true});
+     let reservationError=null,job;
+     const reservePage=async()=>{try{await reserve();}catch(e){reservationError=e;throw e;}};
+     try{job=await permit({sigunguCd:region.sigungu_cd,bjdongCd:region.bjdong_cd,startPage:region.next_page,pageBudget:1,beforePage:reservePage,automatic:true});}
+     catch(e){job={status:'failed',error:String(e.message||e)};}
      assertOwner();
+     if(reservationError)throw reservationError;
      if(job.status!=='completed'){
       await query(`UPDATE auto_permit_regions SET last_error=$3,failures=failures+1,last_attempt_at=NOW(),next_due_at=NOW()+(LEAST(360,30*(failures+1))*INTERVAL '1 minute')
        WHERE sigungu_cd=$1 AND bjdong_cd=$2 AND EXISTS(SELECT 1 FROM auto_ingest_state WHERE source='permits' AND lease_token=$4 AND lease_until>NOW())`,[region.sigungu_cd,region.bjdong_cd,String(job.error||'수집 실패').slice(0,300),token]);
-      throw Error(job.error||'국토부 수집 실패');
+      const message=String(job.error||'국토부 수집 실패');
+      // Authentication and quota failures affect all regions; stop without spending the rest of the budget.
+      if(/인증|활용.{0,12}승인|HTTP\s*(401|403)|SERVICE_KEY|SERVICE_ACCESS_DENIED|LIMITED_NUMBER|일일.*한도/i.test(message))throw Error(message);
+      failures.push(region.sigungu_cd+'/'+region.bjdong_cd);
+      continue;
      }
      const next=permitPageState(job);
      const saved=await query(`UPDATE auto_permit_regions SET next_page=$3,last_attempt_at=NOW(),last_success_at=NOW(),last_cycle_at=CASE WHEN $4 THEN NOW() ELSE last_cycle_at END,
@@ -86,7 +101,7 @@ function createAutoIngest({query,permit,bids,busy,env=process.env}){
      if(!saved.rows.length)throw Error('국토부 자동 수집 진행 저장 실패');
      handled++;
     }
-    return {delay:60,processed:handled>0};
+    return {delay:failures.length&&!handled?1800:60,processed:handled>0,warning:failures.length?'국토부 '+failures.length+'개 지역 실패·다른 지역 계속 수집 ('+failures.join(', ')+')':null};
    });
   }catch(e){console.error('Automatic ingestion:',e.message);}finally{active=false;}
  }

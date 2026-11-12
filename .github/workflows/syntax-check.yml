@@ -21,7 +21,9 @@ jobs:
       - name: Test national building lifecycle ingestion
         run: node --test test/*.test.js
       - name: Check client JavaScript
-        run: node --check public/app.js
+        run: |
+          node --check public/app.js
+          node --check public/national-coverage.js
       - name: Check admin inline script
         run: |
           node - <<'NODE'

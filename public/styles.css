@@ -45,3 +45,5 @@
 .trade-notice p{color:#718096;font-size:12px;margin:7px 0}
 .trade-notice a{color:#2463eb;font-size:12px}
 @media(max-width:620px){.trade-grid{grid-template-columns:1fr}}
+
+.national-coverage{margin:12px 0;padding:12px;background:#fff;border:1px solid #e1e6ef;border-radius:12px}.national-coverage summary{cursor:pointer;font-weight:600}.national-coverage .coverage-scroll{overflow:auto;max-height:460px;margin:12px 0}.national-coverage table{border-collapse:collapse;width:100%;font-size:13px;min-width:620px}.national-coverage th,.national-coverage td{text-align:left;padding:9px;border-bottom:1px solid #e1e6ef;vertical-align:top}.national-coverage th{position:sticky;top:0;background:#f4f6fb}.national-coverage p{line-height:1.65}

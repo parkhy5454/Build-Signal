@@ -12,6 +12,7 @@ const { createDirectorySync,directoryMatches,coverageSummary,SOURCES:directorySo
 const { profiles, scoreProject } = require("./scoring");
 const { permitDate, permitLifecycle } = require("./archhub");
 const { createAutoIngest } = require("./auto-ingest");
+const {REGION_STATS_SQL,nationalCoverage}=require("./national-coverage");
 const { meta:regionCatalogMeta,provinces,regionAliases,installRegionCatalog } = require("./region-catalog");
 
 const app = express();
@@ -1851,6 +1852,22 @@ const automaticIngest=createAutoIngest({query,
  }
 });
 app.get('/api/regions',(req,res)=>res.json({regions:provinces,catalogDate:regionCatalogMeta.retrievedOn}));
+let nationalCoverageCache=null,nationalCoverageLoading=null;
+app.get('/api/ingestion/coverage',async(req,res)=>{
+ try{
+  if(!nationalCoverageCache||nationalCoverageCache.expiresAt<Date.now()){
+   if(!nationalCoverageLoading)nationalCoverageLoading=(async()=>{
+    const [stats,directories]=await Promise.all([
+     query(REGION_STATS_SQL),query('SELECT source,last_success_at,last_error,record_count FROM directory_sync_state')
+    ]);
+    const data=nationalCoverage({stats:stats.rows,directories:directories.rows,configured:!!process.env.ARCH_HUB_SERVICE_KEY,enabled:automaticIngest.enabled(),env:process.env});
+    nationalCoverageCache={data,expiresAt:Date.now()+60000};
+   })().finally(()=>{nationalCoverageLoading=null;});
+   await nationalCoverageLoading;
+  }
+  res.json(nationalCoverageCache.data);
+ }catch{res.status(500).json({error:'전국 지역별 수집 현황 조회 실패'});}
+});
 app.get('/api/ingestion/freshness',async(req,res)=>{
  try{
   const states=await query("SELECT source,last_success_at,last_attempt_at,next_due_at,last_error,CASE WHEN call_day=(NOW() AT TIME ZONE 'Asia/Seoul')::date THEN daily_calls ELSE 0 END AS daily_calls,call_day,lease_until FROM auto_ingest_state ORDER BY source");
