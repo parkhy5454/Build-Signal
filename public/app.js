@@ -52,8 +52,36 @@ window.detail=async id=>{
  $("modal").classList.remove("hidden");
  }catch(e){alert(e.message);}
 };
-function showPage(page){currentPage=page;document.querySelectorAll(".page").forEach(x=>x.classList.toggle("active",x.id===page));document.querySelectorAll("nav a").forEach(x=>x.classList.toggle("active",x.dataset.page===page));$("pageTitle").textContent=({dashboard:"대시보드",projects:"프로젝트·연락처 검색",recommend:"AI 영업 추천",favorites:"관심 현장"})[page]||"BUILD SIGNAL";if(page==="projects")search(1);if(page==="recommend")recommendations();if(page==="favorites")favorites();if(page==="dashboard")dashboard();}
+
+let groupPage=1,groupPages=1;
+async function groups(page=1){
+ groupPage=Math.max(1,page);
+ const params=new URLSearchParams({q:$('groupQ').value,region:$('groupRegion').value,trade:$('groupTrade').value,page:String(groupPage)});
+ try{
+  const d=await api('/api/project-groups?'+params);
+  groupPages=Math.max(1,d.pages||1);
+  $('groupCount').textContent='총 '+fmt(d.total)+'개 · '+d.page+'/'+groupPages+' 페이지';
+  $('groupResults').innerHTML=d.rows.length?d.rows.map(g=>`<article class="project-card"><div class="project-main"><span class="tag">통합 프로젝트</span><h4>${esc(g.title)}</h4><p>${esc(g.location)}</p><div class="meta"><span>발주처: ${esc(g.owner)}</span><span>연결 공고 ${fmt(g.notice_count)}건</span><span>공종 ${fmt(g.trade_count)}개</span><span>연락처 ${fmt(g.contact_count)}건</span></div></div><div class="card-actions"><button class="button primary" onclick="groupDetail(${Number(g.id)})">공종·연락처 보기</button></div></article>`).join(''):'<div class="panel">조건에 맞는 통합 프로젝트가 없습니다. 관리자 최초 일괄 연결 후 확인할 수 있습니다.</div>';
+  $('groupPageInfo').textContent=d.page+' / '+groupPages;
+  $('groupPrev').disabled=groupPage<=1;$('groupNext').disabled=groupPage>=groupPages;
+ }catch(e){$('groupResults').innerHTML='<div class="notice">'+esc(e.message)+'</div>';}
+}
+window.groupDetail=async id=>{
+ try{
+  const g=await api('/api/project-groups/'+id);
+  const roles=['client','designer','supervisor','contractor'];
+  const byRole=role=>[...g.contacts,...g.notices.flatMap(n=>(n.contacts||[]))].filter(c=>c.role===role);
+  const grouped=roles.map(role=>`<section class="role-section"><div class="role-heading"><h4>${roleLabels[role]}</h4><span class="role-count">${byRole(role).length}개</span></div>${byRole(role).length?byRole(role).map(contactCard).join(''):'<div class="empty-contact">확인된 정보 없음</div>'}</section>`).join('');
+  $('modalBody').innerHTML=`<span class="eyebrow">BUILD SIGNAL · 상위 프로젝트</span><h2 class="project-detail-title">${esc(g.title)}</h2><p class="muted">${esc(g.owner)} · ${esc(g.location)}</p><div class="contact-section-title"><h3>공종별 원본 입찰공고 (${g.notices.length}건)</h3><p>공고명과 공종, 원본 출처를 구분해 표시합니다.</p></div><div class="trade-grid">${g.notices.map(n=>`<article class="trade-notice"><span class="tag">${esc(n.building_type||'공종 미확인')}</span><h4>${esc(n.notice_title)}</h4><p>발주처: ${esc(n.owner||'미확인')}</p><p>담당자 연락처 ${(n.contacts||[]).length}건</p><button class="button light" onclick="detail(${Number(n.id)})">공고 상세 보기</button>${n.source_url&&/^https?:\/\//i.test(n.source_url)?` <a href="${esc(n.source_url)}" target="_blank" rel="noopener noreferrer">원본 ↗</a>`:''}</article>`).join('')}</div><div class="contact-section-title"><h3>프로젝트 통합 담당자 연락처</h3><p>공종별 공고와 프로젝트에 등록된 실제 공개 연락처</p></div><div class="roles-grid">${grouped}</div>`;
+  $('modal').classList.remove('hidden');
+ }catch(e){alert(e.message);}
+};
+
+function showPage(page){currentPage=page;document.querySelectorAll(".page").forEach(x=>x.classList.toggle("active",x.id===page));document.querySelectorAll("nav a").forEach(x=>x.classList.toggle("active",x.dataset.page===page));$("pageTitle").textContent=({dashboard:"대시보드",groups:"통합 프로젝트",projects:"프로젝트·연락처 검색",recommend:"AI 영업 추천",favorites:"관심 현장"})[page]||"BUILD SIGNAL";if(page==="groups")groups(1);if(page==="projects")search(1);if(page==="recommend")recommendations();if(page==="favorites")favorites();if(page==="dashboard")dashboard();}
 document.querySelectorAll("[data-page],[data-go]").forEach(a=>a.addEventListener("click",e=>{e.preventDefault();const p=a.dataset.page||a.dataset.go;history.replaceState(null,"","#"+p);showPage(p);}));
+$('groupSearchBtn').onclick=()=>groups(1);
+$('groupPrev').onclick=()=>{if(groupPage>1)groups(groupPage-1);};
+$('groupNext').onclick=()=>{if(groupPage<groupPages)groups(groupPage+1);};
 $("searchBtn").onclick=()=>search(1);
 $("prevPage").onclick=()=>{if(searchPage>1)search(searchPage-1);};
 $("nextPage").onclick=()=>{if(searchPage<searchTotalPages)search(searchPage+1);};$("recommendBtn").onclick=recommendations;$("closeModal").onclick=()=>$("modal").classList.add("hidden");$("modal").onclick=e=>{if(e.target===$("modal"))$("modal").classList.add("hidden");};

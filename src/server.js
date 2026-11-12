@@ -197,6 +197,46 @@ async function g2bFetchPage(start, end, page) {
   if (Number.isFinite(total) && total > 0 && items.length === 0) throw new Error(`공고 ${total}건의 항목 구조를 읽지 못했습니다.`);
   return { items, total: Number.isFinite(total) ? total : null };
 }
+
+const PROJECT_TRADES = [
+  ['소방', /(?:소방(?:시설)?(?:전기|기계)?공사|소방공사)$/],
+  ['통신', /(?:정보통신공사|통신공사)$/],
+  ['전기', /(?:전기(?:설비)?공사)$/],
+  ['기계설비', /(?:기계설비공사|기계공사|설비공사)$/],
+  ['건축', /(?:건축공사|건설공사|토목공사)$/]
+];
+function projectGroupIdentity(p) {
+  if (p.source !== 'g2b_bid' || !p.name || !p.owner || !p.address || !p.region) return null;
+  let title = String(p.name).normalize('NFKC').replace(/\s+/g,' ').trim();
+  let trade = null;
+  // 오직 말미에 명시된 공종만 제거합니다. 불확실한 이름은 개별 프로젝트로 유지합니다.
+  for (const [label, re] of PROJECT_TRADES) {
+    const match = re.exec(title);
+    if (match) {
+      trade=label;
+      title=title.slice(0,match.index).replace(/[\s()\[\]·,/-]+$/g,'').trim();
+      break;
+    }
+  }
+  if (!trade || title.length < 8) return null;
+  const owner=String(p.owner).normalize('NFKC').replace(/\s+/g,'').trim();
+  const location=String(p.address).normalize('NFKC').replace(/\s+/g,'').trim();
+  const region=String(p.region).normalize('NFKC').trim();
+  if (!owner || !location || location.length < 3) return null;
+  const key=crypto.createHash('sha256').update([title.replace(/\s+/g,''),owner,region,location].join('|')).digest('hex');
+  return {key,title,owner:p.owner,region:p.region,location:p.address,trade};
+}
+async function linkProjectGroup(p) {
+  const identity=projectGroupIdentity(p);
+  if (!identity) return null;
+  const r=await query(`INSERT INTO project_groups(group_key,title,owner,region,location)
+    VALUES($1,$2,$3,$4,$5)
+    ON CONFLICT(group_key) DO UPDATE SET updated_at=NOW()
+    RETURNING id`,[identity.key,identity.title,identity.owner,identity.region,identity.location]);
+  await query('UPDATE projects SET project_group_id=$1 WHERE id=$2 AND project_group_id IS DISTINCT FROM $1',[r.rows[0].id,p.id]);
+  return r.rows[0].id;
+}
+
 async function g2bRunJob(job) {
   try {
     // 성공 확인된 1시간 조회 범위로 고정. 마지막 1시간은 분 경계에서 겹치지 않도록 처리.
@@ -242,6 +282,11 @@ async function g2bRunJob(job) {
         VALUES(${vals.map((_,i)=>`$${i+1}`).join(",")})
         ON CONFLICT(source,external_id) DO UPDATE SET name=EXCLUDED.name,address=EXCLUDED.address,region=EXCLUDED.region,district=EXCLUDED.district,building_type=EXCLUDED.building_type,stage='BID',completion_date=EXCLUDED.completion_date,estimated_cost=EXCLUDED.estimated_cost,owner=EXCLUDED.owner,source_url=EXCLUDED.source_url,source_updated_at=EXCLUDED.source_updated_at,updated_at=NOW()
         RETURNING (xmax = 0) AS inserted`, vals);
+      // 원본 공고는 보존하고, 근거가 충분한 경우에만 상위 프로젝트에 연결합니다.
+      try {
+        const pr=await query("SELECT id,source,name,owner,address,region FROM projects WHERE source=$1 AND external_id=$2",['g2b_bid',externalId]);
+        if (pr.rows[0]) await linkProjectGroup(pr.rows[0]);
+      } catch(groupError) { console.warn('Project group linking skipped:',groupError.message); }
       // 나라장터가 공개한 발주기관 연락처만 저장합니다. 미확인 설계/감리/시공 담당자는 생성하지 않습니다.
       const agencyName = demandAgency || agency;
       if (agencyName) {
@@ -376,6 +421,57 @@ app.get('/api/contacts/summary', async (req,res) => {
     res.json(r.rows[0]);
   } catch(e){res.status(500).json({error:e.message});}
 });
+
+app.get('/api/project-groups', async(req,res)=>{
+ try{
+  const q=String(req.query.q||'').slice(0,120), region=String(req.query.region||'').slice(0,80);
+  const trade=String(req.query.trade||'').slice(0,60);
+  const page=Math.max(1,parseInt(req.query.page,10)||1);
+  const limit=24;
+  const where=['1=1'],args=[];
+  if(q){args.push('%'+q+'%');where.push(`(g.title ILIKE ${args.length} OR g.owner ILIKE ${args.length})`);}
+  if(region){args.push('%'+region+'%');where.push(`g.region ILIKE ${args.length}`);}
+  if(trade){args.push('%'+trade+'%');where.push(`EXISTS(SELECT 1 FROM projects p WHERE p.project_group_id=g.id AND p.building_type ILIKE ${args.length})`);}
+  const clause=where.join(' AND ');
+  const total=await query(`SELECT COUNT(*)::int AS n FROM project_groups g WHERE ${clause}`,args);
+  const rows=await query(`SELECT g.id,g.title,g.owner,g.region,g.location,
+    COUNT(p.id)::int AS notice_count,
+    COUNT(DISTINCT p.building_type)::int AS trade_count,
+    COUNT(DISTINCT c.id)::int AS contact_count,
+    MAX(p.updated_at) AS latest_notice
+    FROM project_groups g JOIN projects p ON p.project_group_id=g.id
+    LEFT JOIN project_contacts c ON c.project_id=p.id
+    WHERE ${clause}
+    GROUP BY g.id ORDER BY notice_count DESC,latest_notice DESC
+    LIMIT ${args.length+1} OFFSET ${args.length+2}`,[...args,limit,(page-1)*limit]);
+  res.json({rows:rows.rows,total:total.rows[0].n,page,pages:Math.ceil(total.rows[0].n/limit)});
+ }catch(e){res.status(500).json({error:e.message});}
+});
+app.get('/api/project-groups/:id',async(req,res)=>{
+ try{
+  if(!/^\\d+$/.test(req.params.id))return res.status(400).json({error:'잘못된 프로젝트 번호'});
+  const g=await query('SELECT * FROM project_groups WHERE id=$1',[req.params.id]);
+  if(!g.rowCount)return res.status(404).json({error:'프로젝트를 찾을 수 없습니다.'});
+  const notices=await query(`SELECT p.id,p.name AS notice_title,p.building_type,p.stage,p.estimated_cost,p.source_url,p.owner,p.address,
+    COALESCE(json_agg(json_build_object('role',c.role,'organization',c.organization,'department',c.department,'person_name',c.person_name,'phone',c.phone,'email',c.email,'source',c.source,'source_url',c.source_url,'updated_at',c.updated_at)) FILTER (WHERE c.id IS NOT NULL),'[]'::json) AS contacts
+    FROM projects p LEFT JOIN project_contacts c ON c.project_id=p.id
+    WHERE p.project_group_id=$1 GROUP BY p.id ORDER BY p.updated_at DESC`,[req.params.id]);
+  const contacts=await query('SELECT role,organization,department,person_name,phone,email,source,source_url,updated_at FROM project_group_contacts WHERE group_id=$1 ORDER BY role,updated_at DESC',[req.params.id]);
+  res.json({...g.rows[0],notices:notices.rows,contacts:contacts.rows});
+ }catch(e){res.status(500).json({error:e.message});}
+});
+app.post('/api/admin/project-groups/backfill',loadUser,requireAdminRole,async(req,res)=>{
+ try{
+  const limit=Math.min(500,Math.max(1,parseInt(req.body?.limit,10)||200));
+  const cursor=Math.max(0,parseInt(req.body?.cursor,10)||0);
+  const r=await query(`SELECT id,source,name,owner,address,region FROM projects
+    WHERE source='g2b_bid' AND id>$1 ORDER BY id LIMIT $2`,[cursor,limit]);
+  let linked=0,unmatched=0,errors=0;
+  for(const p of r.rows){try{if(await linkProjectGroup(p))linked++;else unmatched++;}catch(e){errors++;console.warn('Group backfill:',p.id,e.message);}}
+  res.json({processed:r.rows.length,linked,unmatched,errors,nextCursor:r.rows.length?r.rows[r.rows.length-1].id:cursor,done:r.rows.length<limit});
+ }catch(e){res.status(500).json({error:e.message});}
+});
+
 app.get("/api/projects/:id", async (req, res) => {
   try {
     const r = await query("SELECT * FROM projects WHERE id=$1", [req.params.id]);

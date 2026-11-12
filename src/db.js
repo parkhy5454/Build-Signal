@@ -96,6 +96,34 @@ async function initDb() {
     );
     CREATE INDEX IF NOT EXISTS idx_project_contacts_project ON project_contacts(project_id);
     CREATE INDEX IF NOT EXISTS idx_project_contacts_role ON project_contacts(role);
+    CREATE TABLE IF NOT EXISTS project_groups (
+      id BIGSERIAL PRIMARY KEY,
+      group_key TEXT NOT NULL UNIQUE,
+      title TEXT NOT NULL,
+      owner TEXT NOT NULL,
+      region TEXT NOT NULL,
+      location TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE TABLE IF NOT EXISTS project_group_contacts (
+      id BIGSERIAL PRIMARY KEY,
+      group_id BIGINT NOT NULL REFERENCES project_groups(id) ON DELETE CASCADE,
+      role TEXT NOT NULL CHECK(role IN ('client','designer','supervisor','contractor')),
+      organization TEXT NOT NULL,
+      department TEXT,
+      person_name TEXT,
+      phone TEXT,
+      email TEXT,
+      source TEXT NOT NULL DEFAULT 'manual',
+      source_url TEXT,
+      verified_at TIMESTAMPTZ,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE(group_id,role,organization,source)
+    );
+    CREATE INDEX IF NOT EXISTS idx_group_contacts_group ON project_group_contacts(group_id);
+    ALTER TABLE projects ADD COLUMN IF NOT EXISTS project_group_id BIGINT REFERENCES project_groups(id) ON DELETE SET NULL;
+    CREATE INDEX IF NOT EXISTS idx_projects_group ON projects(project_group_id);
     CREATE TABLE IF NOT EXISTS ingest_logs (
       id BIGSERIAL PRIMARY KEY,
       source TEXT NOT NULL,
