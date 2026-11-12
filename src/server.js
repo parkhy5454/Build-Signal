@@ -453,10 +453,10 @@ app.get('/api/project-groups/:id',async(req,res)=>{
   const g=await query('SELECT * FROM project_groups WHERE id=$1',[req.params.id]);
   if(!g.rowCount)return res.status(404).json({error:'프로젝트를 찾을 수 없습니다.'});
   const notices=await query(`SELECT p.id,p.name AS notice_title,p.building_type,p.stage,p.estimated_cost,p.source_url,p.owner,p.address,
-    COALESCE(json_agg(json_build_object('role',c.role,'organization',c.organization,'department',c.department,'person_name',c.person_name,'phone',c.phone,'email',c.email,'source',c.source,'source_url',c.source_url,'updated_at',c.updated_at)) FILTER (WHERE c.id IS NOT NULL),'[]'::json) AS contacts
+    COALESCE(json_agg(json_build_object('role',c.role,'organization',c.organization,'department',c.department,'person_name',c.person_name,'phone',c.phone,'email',c.email,'source',c.source,'source_url',c.source_url,'verified_at',c.verified_at,'updated_at',c.updated_at)) FILTER (WHERE c.id IS NOT NULL),'[]'::json) AS contacts
     FROM projects p LEFT JOIN project_contacts c ON c.project_id=p.id
     WHERE p.project_group_id=$1 GROUP BY p.id ORDER BY p.updated_at DESC`,[req.params.id]);
-  const contacts=await query('SELECT role,organization,department,person_name,phone,email,source,source_url,updated_at FROM project_group_contacts WHERE group_id=$1 ORDER BY role,updated_at DESC',[req.params.id]);
+  const contacts=await query('SELECT role,organization,department,person_name,phone,email,source,source_url,verified_at,updated_at FROM project_group_contacts WHERE group_id=$1 ORDER BY role,updated_at DESC',[req.params.id]);
   res.json({...g.rows[0],notices:notices.rows,contacts:contacts.rows});
  }catch(e){res.status(500).json({error:e.message});}
 });
