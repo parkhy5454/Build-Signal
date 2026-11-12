@@ -555,7 +555,11 @@ document.getElementById('legalDongQueueStatus').addEventListener('click',async()
  try{
   const r=await fetch('/api/admin/permits/region-queues/'+encodeURIComponent(id)+'/status');
   const d=await r.json();if(!r.ok)throw Error(d.error||'상태 조회 실패');
-  const q=d.queue,lines=['목록: '+q.label,'상태: '+q.status,'완료 묶음: '+q.nextBatch+' / '+q.batchCount,'진행률: '+q.percent+'%','최근 DB 갱신: '+new Date(q.updatedAt).toLocaleString()];
+  const q=d.queue,lines=['목록: '+q.label,'상태: '+q.status,'완료 묶음: '+q.nextBatch+' / '+q.batchCount,'진행률(완료 묶음 기준): '+q.percent+'%','최근 DB 갱신: '+new Date(q.updatedAt).toLocaleString()];
+  const batchStart=q.nextBatch*20, batchSize=Math.max(0,Math.min(20,q.regionCount-batchStart));
+  const completedInBatch=Math.max(0,Math.min(batchSize,Number(q.nextRegion)||0));
+  if(q.status!=='completed'&&batchSize>0)lines.push('현재 묶음: '+(q.nextBatch+1)+'번 / '+q.batchCount+'개','묶음 내 완료 지역: '+completedInBatch+' / '+batchSize,'재개 시 시작 위치: '+(completedInBatch+1)+'번째 지역 (현재 묶음 기준)');
+  if(q.status==='failed')lines.push('재시도 안내: 기존 완료 지역은 건너뛰고 실패 위치부터 다시 수집합니다. 수집 시작일·종료일은 최초 실행과 같아야 합니다.');
   if(q.lastError)lines.push('마지막 실패 지역: '+(q.failedRegion||'확인 불가'),'실패 원인: '+q.lastError,'실패 시각: '+(q.failedAt?new Date(q.failedAt).toLocaleString():'확인 불가'));
   if(d.active)lines.push('현재 묶음 지역 완료: '+d.active.completedRegions+' / '+d.active.regionCount,'API 수신: '+d.active.received+'건','신규 저장: '+d.active.inserted+'건','기존 갱신: '+d.active.updated+'건');
   else if(q.status==='running')lines.push('현재 서버에서 실행 정보가 확인되지 않습니다. 다른 서버 실행 중이거나 재시작되었을 수 있습니다.');
