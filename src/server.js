@@ -530,7 +530,7 @@ app.get('/api/admin/permits/region-queues/:id/status',loadUser,requireAdminRole,
    received:permitJob.received||0,inserted:permitJob.inserted||0,updated:permitJob.updated||0,
    startedAt:permitJob.startedAt||null
   }:null;
-  res.json({queue:{...q,batchCount,percent:batchCount?Math.round(q.nextBatch/batchCount*100):100},active});
+  res.json({queue:{...q,batchCount,percent:batchCount?Math.round(q.nextBatch/batchCount*100):100,errorCategory:q.lastError?classifyPermitApiError(q.lastError):null},active});
  }catch(e){res.status(500).json({error:'작업 진행 상태 조회 실패'});}
 });
 
