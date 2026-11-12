@@ -38,7 +38,7 @@ async function initDb() {
       last_attempt_at TIMESTAMPTZ,last_success_at TIMESTAMPTZ,last_error TEXT,
       lease_token TEXT,lease_until TIMESTAMPTZ,call_day DATE,daily_calls INTEGER NOT NULL DEFAULT 0
     );
-    INSERT INTO auto_ingest_state(source) VALUES('permits'),('bids'),('early') ON CONFLICT DO NOTHING;
+    INSERT INTO auto_ingest_state(source) VALUES('permits'),('bids'),('early'),('environment_review') ON CONFLICT DO NOTHING;
     CREATE TABLE IF NOT EXISTS auto_permit_regions (
       sigungu_cd CHAR(5) NOT NULL,bjdong_cd CHAR(5) NOT NULL,label TEXT NOT NULL DEFAULT '',
       enabled BOOLEAN NOT NULL DEFAULT TRUE,next_page INTEGER NOT NULL DEFAULT 1 CHECK(next_page>0),
@@ -122,6 +122,11 @@ async function initDb() {
     CREATE TABLE IF NOT EXISTS early_source_documents (
       url TEXT PRIMARY KEY,title TEXT NOT NULL,content_hash TEXT,record_count INTEGER NOT NULL DEFAULT 0,
       last_checked_at TIMESTAMPTZ,last_error TEXT
+    );
+    CREATE TABLE IF NOT EXISTS environment_review_details (
+      project_id BIGINT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+      result_code TEXT NOT NULL,kind TEXT NOT NULL CHECK(kind IN ('environment','strategic')),
+      public_period TEXT,approving_authority TEXT,consulting_authority TEXT
     );
     CREATE TABLE IF NOT EXISTS project_party_evidence (
       id BIGSERIAL PRIMARY KEY,project_id BIGINT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
