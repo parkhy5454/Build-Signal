@@ -449,6 +449,34 @@ app.post('/api/admin/permits/sync',loadUser,requireAdminRole,(req,res)=>{
 });
 app.get('/api/admin/permits/progress',loadUser,requireAdminRole,(req,res)=>res.json({job:permitJob}));
 
+app.post('/api/admin/permits/batch',loadUser,requireAdminRole,(req,res)=>{
+ if(!process.env.ARCH_HUB_SERVICE_KEY)return res.status(400).json({error:'ARCH_HUB_SERVICE_KEY 미설정'});
+ if(permitJob?.status==='running')return res.status(409).json({error:'이미 수집 중입니다.'});
+ const {regions,startDate,endDate}=req.body||{};
+ if(!Array.isArray(regions)||regions.length<1||regions.length>20)return res.status(400).json({error:'지역은 한 번에 1~20개까지 지정할 수 있습니다.'});
+ const cleaned=regions.map(r=>({sigunguCd:String(r?.sigunguCd||''),bjdongCd:String(r?.bjdongCd||'')}));
+ if(cleaned.some(r=>!/^\d{5}$/.test(r.sigunguCd)||!/^\d{5}$/.test(r.bjdongCd)))return res.status(400).json({error:'지역코드는 각각 5자리 숫자여야 합니다.'});
+ if(!permitDate(startDate)||!permitDate(endDate)||startDate>endDate)return res.status(400).json({error:'유효한 YYYYMMDD 기간을 지정하세요.'});
+ const days=(Date.parse(permitDate(endDate))-Date.parse(permitDate(startDate)))/86400000;
+ if(days>29)return res.status(400).json({error:'한 번에 최대 30일까지만 수집할 수 있습니다.'});
+ const unique=[...new Map(cleaned.map(r=>[r.sigunguCd+':'+r.bjdongCd,r])).values()];
+ permitJob={status:'running',received:0,inserted:0,updated:0,skipped:0,pages:0,total:0,completedRegions:0,regionCount:unique.length,errors:[],startedAt:new Date().toISOString()};
+ void (async()=>{
+  const aggregate=permitJob;
+  for(const region of unique){
+   const child={status:'running',received:0,inserted:0,updated:0,skipped:0,pages:0,total:0};
+   await permitSync(child,{...region,startDate,endDate});
+   for(const key of ['received','inserted','updated','skipped','pages'])aggregate[key]+=child[key];
+   aggregate.completedRegions++;
+   if(child.status!=='completed')aggregate.errors.push(region.sigunguCd+'-'+region.bjdongCd+': '+(child.error||'수집 실패'));
+  }
+  aggregate.status=aggregate.errors.length?(aggregate.completedRegions===aggregate.errors.length?'failed':'partial'):'completed';
+  aggregate.finishedAt=new Date().toISOString();
+ })().catch(e=>{permitJob.status='failed';permitJob.error=String(e.message).slice(0,200);permitJob.finishedAt=new Date().toISOString();});
+ res.status(202).json({job:permitJob});
+});
+
+
 // 관리자 전용 연락처 확보율과 현장별 담당자 목록
 app.get('/api/admin/contacts/coverage', loadUser, requireAdminRole, async (req,res) => {
   try {
