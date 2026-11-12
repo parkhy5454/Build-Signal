@@ -33,6 +33,14 @@ async function initDb() {
       approved_at TIMESTAMPTZ
     );
     CREATE INDEX IF NOT EXISTS idx_users_status ON users(status);
+    CREATE TABLE IF NOT EXISTS permit_ingest_jobs (
+      id BIGSERIAL PRIMARY KEY,
+      status TEXT NOT NULL DEFAULT 'running',
+      job_data JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_permit_ingest_jobs_created ON permit_ingest_jobs(created_at DESC);
     CREATE TABLE IF NOT EXISTS projects (
       id BIGSERIAL PRIMARY KEY,
       source TEXT NOT NULL DEFAULT 'manual',
