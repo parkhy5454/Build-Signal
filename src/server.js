@@ -491,7 +491,7 @@ app.post('/api/admin/permits/region-queues/:id/run-next',loadUser,requireAdminRo
   queue=result.rows[0];
   if(!queue)return res.status(404).json({error:'저장 목록 없음'});
   if(queue.status==='completed'||queue.next_batch*20>=queue.regions.length)return res.status(409).json({error:'모든 묶음이 완료되었습니다.'});
-  const locked=await query("UPDATE permit_region_queues SET status='running',updated_at=NOW() WHERE id=$1 AND next_batch=$2 AND status IN ('prepared','failed','running') RETURNING id",[queue.id,queue.next_batch]);
+  const locked=await query("UPDATE permit_region_queues SET status='running',updated_at=NOW() WHERE id=$1 AND next_batch=$2 AND status IN ('prepared','failed') RETURNING id",[queue.id,queue.next_batch]);
   if(!locked.rows.length)return res.status(409).json({error:'수집 목록 상태를 확인하세요.'});
  }catch(e){return res.status(500).json({error:'수집 목록 준비 실패'});}
  const regions=queue.regions.slice(queue.next_batch*20,(queue.next_batch+1)*20);
@@ -513,10 +513,21 @@ app.post('/api/admin/permits/region-queues/:id/run-next',loadUser,requireAdminRo
    job.status='completed';
   }catch(e){
    job.status='failed';job.error=String(e.message).slice(0,200);
-   await query("UPDATE permit_region_queues SET status='failed',updated_at=NOW() WHERE id=$1 AND next_batch=$2",[queue.id,queue.next_batch]).catch(()=>{});
+   await query("UPDATE permit_region_queues SET status='failed',updated_at=NOW() WHERE id=$1 AND next_batch=$2 AND status='running'",[queue.id,queue.next_batch]).catch(()=>{});
   }finally{job.finishedAt=new Date().toISOString();await savePermitJob(job).catch(()=>{});}
  })();
  res.status(202).json({job});
+});
+
+
+app.post('/api/admin/permits/region-queues/:id/recover-stale',loadUser,requireAdminRole,async(req,res)=>{
+ if(!/^\d+$/.test(req.params.id))return res.status(400).json({error:'잘못된 목록 ID'});
+ if(permitJob?.status==='running'&&String(permitJob.queueId)===req.params.id)return res.status(409).json({error:'현재 서버에서 수집 중이므로 복구할 수 없습니다.'});
+ try{
+  const r=await query("UPDATE permit_region_queues SET status='failed',updated_at=NOW() WHERE id=$1 AND status='running' AND updated_at < NOW()-INTERVAL '60 minutes' RETURNING id,next_batch AS \"nextBatch\"",[req.params.id]);
+  if(!r.rows.length)return res.status(409).json({error:'중단된 작업이 없거나 마지막 시작 후 60분이 지나지 않았습니다.'});
+  res.json({queue:r.rows[0],message:'중단된 작업을 재시도 가능 상태로 변경했습니다. 완료 위치는 유지됩니다.'});
+ }catch(e){res.status(500).json({error:'중단 작업 복구 실패'});}
 });
 
 app.post('/api/admin/permits/region-queues/:id/checkpoint',loadUser,requireAdminRole,async(req,res)=>{
@@ -524,7 +535,7 @@ app.post('/api/admin/permits/region-queues/:id/checkpoint',loadUser,requireAdmin
  const nextBatch=Number(req.body?.nextBatch);
  if(!Number.isSafeInteger(nextBatch)||nextBatch<0)return res.status(400).json({error:'완료 묶음 수는 0 이상의 정수여야 합니다.'});
  try{
-  const r=await query("UPDATE permit_region_queues SET next_batch=$2,status=CASE WHEN $2>=CEIL(jsonb_array_length(regions)/20.0) THEN 'completed' ELSE 'prepared' END,updated_at=NOW() WHERE id=$1 AND $2<=CEIL(jsonb_array_length(regions)/20.0) AND $2>=next_batch RETURNING id,next_batch AS \"nextBatch\",status",[req.params.id,nextBatch]);
+  const r=await query("UPDATE permit_region_queues SET next_batch=$2,status=CASE WHEN $2>=CEIL(jsonb_array_length(regions)/20.0) THEN 'completed' ELSE 'prepared' END,updated_at=NOW() WHERE id=$1 AND $2<=CEIL(jsonb_array_length(regions)/20.0) AND $2>=next_batch AND status <> 'running' RETURNING id,next_batch AS \"nextBatch\",status",[req.params.id,nextBatch]);
   if(!r.rows.length)return res.status(409).json({error:'목록이 없거나 완료 위치가 유효하지 않습니다. 이미 완료한 위치로 되돌릴 수 없습니다.'});
   res.json({queue:r.rows[0]});
  }catch(e){res.status(500).json({error:'완료 위치 저장 실패'});}
