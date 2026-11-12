@@ -353,6 +353,14 @@ app.get("/api/admin/g2b/status", loadUser, requireAdminRole, async (req,res) => 
 });
 
 
+// Read-only building permit ingestion readiness. Never expose the API key.
+app.get('/api/admin/permits/status',loadUser,requireAdminRole,async(req,res)=>{
+ try{
+  const result=await query("SELECT COUNT(*)::int AS total, MAX(updated_at) AS last_updated FROM projects WHERE source='arch_hub_permit'");
+  res.json({configured:!!process.env.ARCH_HUB_SERVICE_KEY,total:result.rows[0].total,last_updated:result.rows[0].last_updated,ingestion_enabled:false});
+ }catch(e){res.status(500).json({error:'건축허가 수집 상태를 확인하지 못했습니다.'});}
+});
+
 // 관리자 전용 연락처 확보율과 현장별 담당자 목록
 app.get('/api/admin/contacts/coverage', loadUser, requireAdminRole, async (req,res) => {
   try {
