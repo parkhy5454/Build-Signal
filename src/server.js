@@ -168,13 +168,18 @@ app.get("/api/health", async (req, res) => {
 app.post("/api/admin/g2b/sync", loadUser, requireAdminRole, async (req, res) => {
   const serviceKey = process.env.G2B_SERVICE_KEY;
   if (!serviceKey) return res.status(400).json({ error: "Render 환경변수 G2B_SERVICE_KEY가 설정되지 않았습니다." });
-  const days = Math.min(7, Math.max(1, Number(req.body.days) || 7));
+  // 진단 단계: 날짜 범위 초과(07)를 분리 확인하기 위해 KST 기준 최근 1시간만 조회.
+  // 성공하면 일 단위 분할 수집으로 확장할 수 있습니다.
   const end = new Date();
-  // 나라장터의 7일 제한은 시작일과 종료일을 모두 포함해 계산될 수 있어
-  // 정확히 7*24시간 대신 경계 여유를 둔 6일 23시간 59분으로 조회합니다.
-  const safeWindowMs = Math.min(days * 24 * 60 * 60 * 1000, 7 * 24 * 60 * 60 * 1000 - 60 * 1000);
-  const start = new Date(end.getTime() - safeWindowMs);
-  const fmt = d => d.getFullYear() + String(d.getMonth()+1).padStart(2,"0") + String(d.getDate()).padStart(2,"0") + String(d.getHours()).padStart(2,"0") + String(d.getMinutes()).padStart(2,"0");
+  const start = new Date(end.getTime() - 60 * 60 * 1000);
+  const fmt = d => {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', hourCycle: 'h23'
+    }).formatToParts(d);
+    const v = Object.fromEntries(parts.map(p => [p.type, p.value]));
+    return `${v.year}${v.month}${v.day}${v.hour}${v.minute}`;
+  };
   const params = new URLSearchParams({
     serviceKey,
     pageNo: "1",
@@ -236,7 +241,7 @@ app.post("/api/admin/g2b/sync", loadUser, requireAdminRole, async (req, res) => 
     }
     await query("INSERT INTO ingest_logs(source,received_count,inserted_count,status,message) VALUES($1,$2,$3,'SUCCESS',$4)",
       ["g2b_bid", items.length, inserted, `Updated ${updated}; skipped ${skipped}; range ${fmt(start)}-${fmt(end)}`]);
-    res.json({ ok: true, received: items.length, inserted, updated, skipped, range: { from: fmt(start), to: fmt(end) }, note: "공사 입찰공고 1페이지(최대 100건)를 수집했습니다. 추가 페이지는 다음 버전에서 이어받도록 확장할 수 있습니다." });
+    res.json({ ok: true, received: items.length, inserted, updated, skipped, range: { from: fmt(start), to: fmt(end) }, note: "오류 07 진단을 위해 최근 1시간만 조회했습니다. 정상 확인 후 7일 분할 수집을 구현합니다." });
   } catch (e) {
     await query("INSERT INTO ingest_logs(source,received_count,inserted_count,status,message) VALUES($1,0,0,'ERROR',$2)", ["g2b_bid", String(e.message).slice(0,1000)]).catch(()=>{});
     res.status(502).json({ error: e.message });
