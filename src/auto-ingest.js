@@ -14,14 +14,15 @@ function createAutoIngest({query,permit,bids,busy,env=process.env}){
  let timer,active=false,seededAt=0;
  const enabled=()=>env.AUTO_INGEST_ENABLED!=='false';
  async function seed(){
+  await query(`UPDATE auto_permit_regions r SET enabled=FALSE WHERE EXISTS(
+   SELECT 1 FROM permit_legal_dong_codes c WHERE c.code=r.sigungu_cd||r.bjdong_cd
+   AND c.catalog_origin='official_bundle' AND c.active=FALSE)`);
   await query(`INSERT INTO auto_permit_regions(sigungu_cd,bjdong_cd,label)
    SELECT sigungu_cd,bjdong_cd,label FROM permit_region_presets
    UNION SELECT LEFT(code,5),RIGHT(code,5),name FROM permit_legal_dong_codes
     WHERE active=TRUE AND RIGHT(code,5)<>'00000'
    ON CONFLICT(sigungu_cd,bjdong_cd) DO NOTHING`);
-  await query(`INSERT INTO auto_permit_regions(sigungu_cd,bjdong_cd,label)
-   SELECT '11680','10300','서울특별시 강남구 개포동' WHERE NOT EXISTS(SELECT 1 FROM auto_permit_regions)
-   ON CONFLICT DO NOTHING`);
+
  }
  async function leased(source,work){
   const token=crypto.randomUUID();

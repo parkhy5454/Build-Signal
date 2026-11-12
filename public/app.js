@@ -70,7 +70,7 @@ let groupPage=1,groupPages=1;
 async function groups(page=1){
  const stage=stageSearch($('groupQ').value);
  if(stage){
-  $('q').value='';$('stage').value=stage;$('region').value='';$('type').value='';$('contactFilter').value='';$('searchPeriod').value='';
+  $('q').value='';$('stage').value=stage;$('region').value=$('groupRegion').value;$('type').value='';$('contactFilter').value='';$('searchPeriod').value='';
   $('searchFromWrap').hidden=true;$('searchToWrap').hidden=true;
   history.replaceState(null,'','#projects');showPage('projects');return;
  }
@@ -127,10 +127,24 @@ $("q").addEventListener("keydown",e=>{if(e.key==="Enter")search(1);});
       if(me.user.role==='admin'){const a=document.createElement('a');a.className='button light';a.href='/admin.html';a.textContent='회원관리';actions.append(a);}
       const out=document.createElement('button');out.className='button light';out.textContent='로그아웃';out.onclick=async()=>{await fetch('/api/logout',{method:'POST'});location.href='/login.html';};actions.append(out);
     }
+    await loadRegionChoices();
     showPage(location.hash.slice(1)||'dashboard');
   } catch(e) { location.replace('/login.html'); }
 })();
 
+async function loadRegionChoices(){
+ try{
+  const d=await api('/api/regions');
+  for(const id of ['region','groupRegion']){
+   const select=$(id),selected=select.value;select.replaceChildren();
+   const all=document.createElement('option');all.value='';all.textContent='전체 지역';select.appendChild(all);
+   for(const region of d.regions){const opt=document.createElement('option');opt.value=region.value;opt.textContent=region.label;select.appendChild(opt);}
+   select.value=selected;
+  }
+ }catch{ /* Keep bundled HTML choices available when the region endpoint is temporarily unavailable. */ }
+}
+$('region').addEventListener('change',()=>{$('groupRegion').value=$('region').value;search(1);});
+$('groupRegion').addEventListener('change',()=>{$('region').value=$('groupRegion').value;groups(1);});
 async function loadAutomaticFreshness(){
  const out=$('autoFreshness');
  try{
@@ -143,7 +157,7 @@ async function loadAutomaticFreshness(){
    parts.push(label+': '+(!d.configured[row.source]?'인증키 설정 필요':running?'수집 중':row.last_error?'재시도 대기':'예약 대기')+' / 마지막 처리 성공 '+time(row.last_success_at));
   }
   parts.push('국토부 자동 수집 대상 '+fmt(d.coverage.regions)+'개 지역 / 전체 페이지 순회 완료 '+fmt(d.coverage.completed_regions)+'개');
-  parts.push('등록된 지역을 순회합니다. 원천 반영 주기와 호출 한도에 따라 갱신이 지연될 수 있습니다.');
+  parts.push('전국 자료를 순차 적재 중입니다. 지역 선택은 저장된 자료를 검색하며, 미수집 지역은 아직 결과가 없을 수 있습니다.');
   out.textContent=parts.join(' · ');
  }catch(e){out.textContent='자동 갱신 상태를 확인하지 못했습니다. 잠시 후 다시 확인해 주세요.';}
 }
