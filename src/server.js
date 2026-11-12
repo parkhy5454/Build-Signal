@@ -1081,6 +1081,39 @@ app.put("/api/projects/:id/pipeline", async (req, res) => {
 
 
 
+
+app.post('/api/permits/leads/:id/activity',loadUser,async(req,res)=>{
+ if(!/^\d+$/.test(req.params.id))return res.status(400).json({error:'잘못된 현장 ID'});
+ const type=String(req.body?.type||'').trim();
+ const detail=String(req.body?.detail||'').trim();
+ const nextDate=req.body?.nextContactDate===null||req.body?.nextContactDate===''?null:String(req.body?.nextContactDate||'');
+ if(!['CALL','EMAIL','MEETING','NOTE','FOLLOW_UP'].includes(type)||!detail||detail.length>1000)
+  return res.status(400).json({error:'활동 유형과 1~1000자 내용을 입력하세요.'});
+ if(nextDate!==null&&(!/^\d{4}-\d{2}-\d{2}$/.test(nextDate)||!Number.isFinite(Date.parse(nextDate))||new Date(nextDate).toISOString().slice(0,10)!==nextDate))
+  return res.status(400).json({error:'연락 예정일은 YYYY-MM-DD 형식이어야 합니다.'});
+ try{
+  const project=await query("SELECT id FROM projects WHERE id=$1 AND source='arch_hub_permit'",[req.params.id]);
+  if(!project.rows.length)return res.status(404).json({error:'건축허가 현장을 찾을 수 없습니다.'});
+  const userKey=String(req.user.id);
+  const pipeline=await query("SELECT id FROM sales_pipeline WHERE project_id=$1 AND user_key=$2",[req.params.id,userKey]);
+  if(!pipeline.rows.length)return res.status(409).json({error:'먼저 영업 관리에 등록하세요.'});
+  const activity=await query(`INSERT INTO sales_activities(project_id,user_key,activity_type,detail)
+   VALUES($1,$2,$3,$4) RETURNING id,created_at AS "createdAt"`,[req.params.id,userKey,type,detail]);
+  if(nextDate!==null)await query("UPDATE sales_pipeline SET next_contact_date=$3,updated_at=NOW() WHERE project_id=$1 AND user_key=$2",[req.params.id,userKey,nextDate]);
+  res.status(201).json({ok:true,activity:activity.rows[0],nextContactDate:nextDate});
+ }catch(e){res.status(500).json({error:'영업 활동 기록 실패'});}
+});
+app.get('/api/permits/leads/:id/activities',loadUser,async(req,res)=>{
+ if(!/^\d+$/.test(req.params.id))return res.status(400).json({error:'잘못된 현장 ID'});
+ try{
+  const rows=await query(`SELECT a.id,a.activity_type AS type,a.detail,a.created_at AS "createdAt"
+   FROM sales_activities a JOIN projects p ON p.id=a.project_id
+   WHERE a.project_id=$1 AND a.user_key=$2 AND p.source='arch_hub_permit'
+   ORDER BY a.created_at DESC LIMIT 100`,[req.params.id,String(req.user.id)]);
+  res.json({rows:rows.rows});
+ }catch(e){res.status(500).json({error:'영업 활동 이력 조회 실패'});}
+});
+
 app.get('/api/permits/pipeline',loadUser,async(req,res)=>{
  try{
   const allowed=['ALL','NEW','CONTACTED','QUALIFIED','PROPOSAL','WON','LOST'];
@@ -1093,7 +1126,7 @@ app.get('/api/permits/pipeline',loadUser,async(req,res)=>{
   if(status!=='ALL'){args.push(status);filter=' AND sp.status=$2';}
   const count=await query(`SELECT COUNT(*)::int AS total FROM sales_pipeline sp JOIN projects p ON p.id=sp.project_id WHERE sp.user_key=$1 AND p.source='arch_hub_permit'${filter}`,args);
   const rows=await query(`SELECT p.id,p.name,p.address,p.region,p.building_type AS "buildingType",p.stage,p.permit_date AS "permitDate",p.area_sqm AS "areaSqm",p.owner,
-   sp.status,sp.note,sp.updated_at AS "updatedAt"
+   sp.status,sp.note,sp.next_contact_date AS "nextContactDate",sp.updated_at AS "updatedAt"
    FROM sales_pipeline sp JOIN projects p ON p.id=sp.project_id
    WHERE sp.user_key=$1 AND p.source='arch_hub_permit'${filter}
    ORDER BY sp.updated_at DESC,p.id DESC LIMIT $${args.length+1} OFFSET $${args.length+2}`,[...args,limit,offset]);
