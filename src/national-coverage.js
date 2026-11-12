@@ -15,7 +15,7 @@ function nationalCoverage({regions=provinces,stats=[],directories=[],environment
   const targets=Number(s.targets||0),attempted=Number(s.attempted||0),completed=Number(s.completed||0),fresh=Number(s.fresh||0),failed=Number(s.failed||0);
   const labels=new Set([p.value,p.label,...p.aliases]);
   const developerSources=sources.filter(x=>x.source!=='architects'&&(labels.has(x.region)||p.aliases.some(a=>a===SOURCES[x.source]?.region)));
-  const review=p.aliases.includes('서울특별시')?'서울시 건축위원회 최근 게시글 10개 중 지원 형식 PDF':p.aliases.includes('울산광역시')?'울산 남구 공개 본문 일부':p.aliases.includes('전북특별자치도')?'군산 공개 PDF 1건':null;
+  const review=p.aliases.includes('서울특별시')?'서울시 건축위원회 공개목록 순차 탐색 중 · 지원 형식 PDF 일부':p.aliases.includes('울산광역시')?'울산 남구 공개 본문 일부':p.aliases.includes('전북특별자치도')?'군산 공개 PDF 1건':null;
   return {code:p.code,name:p.value,label:p.label,permits:{targets,attempted,completed,fresh,failed,lastAttemptAt:s.last_attempt_at||null,oldestCycle:s.oldest_cycle||null,
    status:!configured?'key_missing':!targets?'queue_pending':!attempted?'pending':completed<targets?'initial_loading':fresh<targets?'refresh_pending':'cycle_current'},
    developers:{status:!developerSources.length?'unconnected':developerSources.every(x=>x.status==='synced')?'synced':developerSources.some(x=>x.status!=='pending')?'retained':'pending',sources:developerSources},

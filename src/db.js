@@ -138,6 +138,14 @@ async function initDb() {
     );
     CREATE TABLE IF NOT EXISTS seoul_review_state(id INTEGER PRIMARY KEY,next_discovery_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
     INSERT INTO seoul_review_state(id) VALUES(1) ON CONFLICT DO NOTHING;
+    ALTER TABLE seoul_review_state ADD COLUMN IF NOT EXISTS archive_page INTEGER NOT NULL DEFAULT 2;
+    ALTER TABLE seoul_review_state ADD COLUMN IF NOT EXISTS archive_total INTEGER;
+    ALTER TABLE seoul_review_state ADD COLUMN IF NOT EXISTS next_archive_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+    ALTER TABLE seoul_review_state ADD COLUMN IF NOT EXISTS archive_completed_at TIMESTAMPTZ;
+    CREATE TABLE IF NOT EXISTS seoul_review_posts (
+      post_id BIGINT PRIMARY KEY,status TEXT NOT NULL DEFAULT 'pending',supported_files INTEGER,
+      next_due_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),last_checked_at TIMESTAMPTZ,last_error TEXT
+    );
     CREATE TABLE IF NOT EXISTS project_party_evidence (
       id BIGSERIAL PRIMARY KEY,project_id BIGINT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
       role TEXT NOT NULL CHECK(role IN ('owner','developer','applicant','designer','contractor','supervisor','operator')),
