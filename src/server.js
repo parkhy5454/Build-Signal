@@ -1116,6 +1116,21 @@ app.get('/api/permits/leads/:id/activities',loadUser,async(req,res)=>{
 
 
 
+
+app.patch('/api/permits/leads/:id/priority',loadUser,async(req,res)=>{
+ if(!/^\d+$/.test(req.params.id))return res.status(400).json({error:'잘못된 현장 ID'});
+ const priority=String(req.body?.priority||'').toUpperCase();
+ if(!['HIGH','NORMAL','LOW'].includes(priority))return res.status(400).json({error:'중요도는 HIGH, NORMAL, LOW 중 선택하세요.'});
+ try{
+  const result=await query(`UPDATE sales_pipeline sp SET priority=$3,updated_at=NOW()
+   FROM projects p WHERE p.id=sp.project_id AND p.source='arch_hub_permit'
+   AND sp.project_id=$1 AND sp.user_key=$2
+   RETURNING sp.project_id AS "projectId",sp.priority`,[req.params.id,String(req.user.id),priority]);
+  if(!result.rows.length)return res.status(404).json({error:'등록된 영업 현장이 없습니다.'});
+  res.json({ok:true,...result.rows[0]});
+ }catch(e){res.status(500).json({error:'영업 중요도 변경 실패'});}
+});
+
 app.patch('/api/permits/leads/:id/followup',loadUser,async(req,res)=>{
  if(!/^\d+$/.test(req.params.id))return res.status(400).json({error:'잘못된 현장 ID'});
  const raw=req.body?.nextContactDate;
@@ -1146,13 +1161,13 @@ app.get('/api/permits/followups',loadUser,async(req,res)=>{
    COUNT(*) FILTER (WHERE sp.next_contact_date<(NOW() AT TIME ZONE 'Asia/Seoul')::date)::int AS overdue,
    COUNT(*) FILTER (WHERE sp.next_contact_date=(NOW() AT TIME ZONE 'Asia/Seoul')::date)::int AS today,
    COUNT(*) FILTER (WHERE sp.next_contact_date>(NOW() AT TIME ZONE 'Asia/Seoul')::date)::int AS upcoming ${base}`,[String(req.user.id)]);
-  const rows=await query(`SELECT p.id,p.name,p.address,p.region,sp.status,sp.note,
+  const rows=await query(`SELECT p.id,p.name,p.address,p.region,sp.status,sp.note,sp.priority,
    sp.next_contact_date AS "nextContactDate",sp.updated_at AS "updatedAt",
    GREATEST(0,((NOW() AT TIME ZONE 'Asia/Seoul')::date-sp.next_contact_date))::int AS "overdueDays",
    CASE WHEN sp.next_contact_date<(NOW() AT TIME ZONE 'Asia/Seoul')::date THEN 'OVERDUE'
     WHEN sp.next_contact_date=(NOW() AT TIME ZONE 'Asia/Seoul')::date THEN 'TODAY'
     ELSE 'UPCOMING' END AS "urgency"
-   ${base}${filters[status]} ORDER BY CASE WHEN sp.next_contact_date<=(NOW() AT TIME ZONE 'Asia/Seoul')::date THEN 0 ELSE 1 END ASC,sp.next_contact_date ASC,p.id DESC LIMIT $2 OFFSET $3`,
+   ${base}${filters[status]} ORDER BY CASE WHEN sp.next_contact_date<=(NOW() AT TIME ZONE 'Asia/Seoul')::date THEN 0 ELSE 1 END ASC,CASE sp.priority WHEN 'HIGH' THEN 0 WHEN 'NORMAL' THEN 1 ELSE 2 END ASC,sp.next_contact_date ASC,p.id DESC LIMIT $2 OFFSET $3`,
    [String(req.user.id),limit,offset]);
   res.json({summary:totals.rows[0],rows:rows.rows,when:status,limit,offset,
    note:'날짜는 한국 표준시(Asia/Seoul)를 기준으로 계산합니다.'});
@@ -1171,7 +1186,7 @@ app.get('/api/permits/pipeline',loadUser,async(req,res)=>{
   if(status!=='ALL'){args.push(status);filter=' AND sp.status=$2';}
   const count=await query(`SELECT COUNT(*)::int AS total FROM sales_pipeline sp JOIN projects p ON p.id=sp.project_id WHERE sp.user_key=$1 AND p.source='arch_hub_permit'${filter}`,args);
   const rows=await query(`SELECT p.id,p.name,p.address,p.region,p.building_type AS "buildingType",p.stage,p.permit_date AS "permitDate",p.area_sqm AS "areaSqm",p.owner,
-   sp.status,sp.note,sp.next_contact_date AS "nextContactDate",sp.updated_at AS "updatedAt"
+   sp.status,sp.note,sp.priority,sp.next_contact_date AS "nextContactDate",sp.updated_at AS "updatedAt"
    FROM sales_pipeline sp JOIN projects p ON p.id=sp.project_id
    WHERE sp.user_key=$1 AND p.source='arch_hub_permit'${filter}
    ORDER BY sp.updated_at DESC,p.id DESC LIMIT $${args.length+1} OFFSET $${args.length+2}`,[...args,limit,offset]);
