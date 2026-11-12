@@ -465,8 +465,9 @@ app.get('/api/admin/permits/legal-dong/batch-preview',loadUser,requireAdminRole,
  const offset=Number(req.query.offset||0);
  if(q.length<2||q.length>100||!Number.isSafeInteger(offset)||offset<0||offset>100000)return res.status(400).json({error:'검색어 2자 이상 및 유효한 시작 위치가 필요합니다.'});
  try{
-  const r=await query("SELECT code,name FROM permit_legal_dong_codes WHERE active=TRUE AND name ILIKE $1 ORDER BY code LIMIT 20 OFFSET $2",['%'+q.replace(/[\\%_]/g,'\\app.get('/api/admin/permits/legal-dong',loadUser,requireAdminRole')+'%',offset]);
-  const count=await query("SELECT COUNT(*)::int AS total FROM permit_legal_dong_codes WHERE active=TRUE AND name ILIKE $1",['%'+q.replace(/[\\%_]/g,'\\app.get('/api/admin/permits/legal-dong',loadUser,requireAdminRole')+'%']);
+  const pattern='%'+q+'%';
+  const r=await query("SELECT code,name FROM permit_legal_dong_codes WHERE active=TRUE AND name ILIKE $1 ORDER BY code LIMIT 20 OFFSET $2",[pattern,offset]);
+  const count=await query("SELECT COUNT(*)::int AS total FROM permit_legal_dong_codes WHERE active=TRUE AND name ILIKE $1",[pattern]);
   res.json({total:count.rows[0].total,offset,regions:r.rows.map(x=>({name:x.name,code:x.code,sigunguCd:x.code.slice(0,5),bjdongCd:x.code.slice(5,10)}))});
  }catch(e){res.status(500).json({error:'수집 대상 미리보기 실패'});}
 });
