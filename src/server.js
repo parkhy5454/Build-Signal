@@ -410,12 +410,17 @@ async function permitSync(job,opts){
    const url=new URL('https://apis.data.go.kr/1613000/ArchPmsHubService/getApBasisOulnInfo');
    for(const [k,v] of Object.entries({serviceKey:key,_type:'json',sigunguCd:opts.sigunguCd,bjdongCd:opts.bjdongCd,startDate:opts.startDate,endDate:opts.endDate,numOfRows:'100',pageNo:String(page)}))url.searchParams.set(k,v);
    const response=await fetch(url,{signal:AbortSignal.timeout(20000)});
-   if(!response.ok)throw Error('HTTP '+response.status);
+   if(!response.ok)throw Error('건축HUB HTTP 오류 '+response.status+' (페이지 '+page+')');
    const raw=await response.text();let data;
-   try{data=JSON.parse(raw);}catch{throw Error('JSON 응답이 아닙니다. XML/오류 응답을 확인해야 합니다.');}
-   const header=data?.response?.header||{};
-   if(String(header.resultCode)!=='00')throw Error('API 오류 코드 '+String(header.resultCode||'unknown'));
-   const body=data?.response?.body||{};
+   try{data=JSON.parse(raw);}catch{throw Error('건축HUB JSON 형식이 아닌 응답 (페이지 '+page+', 형식 '+String(response.headers.get('content-type')||'미확인').slice(0,60)+')');}
+   const header=data?.response?.header||data?.Response?.header||{};
+   const resultCode=String(header.resultCode??header.resultcode??'');
+   if(resultCode!=='00'&&resultCode!=='0'){
+    const resultMsg=String(header.resultMsg||header.resultmsg||'응답 오류').replace(/[\\r\\n]/g,' ').slice(0,120);
+    throw Error('건축HUB API 오류 '+(resultCode||'코드 없음')+' (페이지 '+page+'): '+resultMsg);
+   }
+   const body=data?.response?.body||data?.Response?.body;
+   if(!body||typeof body!=='object')throw Error('건축HUB 응답 본문 누락 (페이지 '+page+')');
    const entries=body.items?.item;
    const items=Array.isArray(entries)?entries:entries?[entries]:[];
    job.received+=items.length;job.pages=page;
