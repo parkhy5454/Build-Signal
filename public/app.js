@@ -87,7 +87,8 @@ window.groupDetail=async id=>{
  }catch(e){alert(e.message);}
 };
 
-function showPage(page){currentPage=page;document.querySelectorAll(".page").forEach(x=>x.classList.toggle("active",x.id===page));document.querySelectorAll("nav a").forEach(x=>x.classList.toggle("active",x.dataset.page===page));$("pageTitle").textContent=({dashboard:"대시보드",groups:"통합 프로젝트",projects:"프로젝트·연락처 검색",recommend:"AI 영업 추천",favorites:"관심 현장"})[page]||"BUILD SIGNAL";if(page==="groups")groups(1);if(page==="projects")search(1);if(page==="recommend")recommendations();if(page==="favorites")favorites();if(page==="dashboard")dashboard();}
+function showPage(page){currentPage=page;document.querySelectorAll(".page").forEach(x=>x.classList.toggle("active",x.id===page));document.querySelectorAll("nav a").forEach(x=>x.classList.toggle("active",x.dataset.page===(page==="projects"?"groups":page)));$("pageTitle").textContent=({dashboard:"대시보드",groups:"건설 프로젝트 통합 검색",projects:"건설 프로젝트 통합 검색",recommend:"AI 영업 추천",favorites:"관심 현장"})[page]||"BUILD SIGNAL";if(page==="groups")groups(1);if(page==="projects")search(1);if(page==="recommend")recommendations();if(page==="favorites")favorites();if(page==="dashboard")dashboard();}
+document.querySelectorAll("[data-search-tab]").forEach(btn=>btn.addEventListener("click",()=>{history.replaceState(null,"","#"+btn.dataset.searchTab);showPage(btn.dataset.searchTab);}));
 document.querySelectorAll("[data-page],[data-go]").forEach(a=>a.addEventListener("click",e=>{e.preventDefault();const p=a.dataset.page||a.dataset.go;history.replaceState(null,"","#"+p);showPage(p);}));
 $('groupSearchBtn').onclick=()=>groups(1);
 $('groupPrev').onclick=()=>{if(groupPage>1)groups(groupPage-1);};
