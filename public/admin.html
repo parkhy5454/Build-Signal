@@ -597,7 +597,7 @@ document.getElementById('permitRegionalLeadChoose').addEventListener('click',()=
 let permitRegionalCsvRows=null;
 function permitRegionalCsvCell(value){
  const raw=String(value??'');
- const safe=/^[\\s]*[=+@-]/.test(raw)?"'"+raw:raw;
+ const safe=/^[\s]*[=+@-]/.test(raw)?"'"+raw:raw;
  return '"'+safe.replace(/"/g,'""')+'"';
 }
 document.getElementById('permitRegionalLeadsCsv').addEventListener('click',()=>{
@@ -605,7 +605,7 @@ document.getElementById('permitRegionalLeadsCsv').addEventListener('click',()=>{
  const d=permitRegionalCsvRows;
  const columns=['현장ID','현장명','주소','지역','건축용도','건축단계','허가일','연면적(㎡)','영업점수','영업상태','추천이유'];
  const rows=d.rows.map(x=>[x.id,x.name,x.address,x.region,x.buildingType,x.stage,x.permitDate,x.areaSqm,x.score,x.pipelineStatus||'미등록',(x.reasons||[]).join(' / ')]);
- const csv='\\uFEFF'+[columns,...rows].map(row=>row.map(permitRegionalCsvCell).join(',')).join('\\r\\n');
+ const csv='\uFEFF'+[columns,...rows].map(row=>row.map(permitRegionalCsvCell).join(',')).join('\r\n');
  const blob=new Blob([csv],{type:'text/csv;charset=utf-8'});
  const url=URL.createObjectURL(blob),a=document.createElement('a');
  a.href=url;a.download='build-signal-regional-leads.csv';document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
