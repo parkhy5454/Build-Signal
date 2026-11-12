@@ -1080,6 +1080,27 @@ app.put("/api/projects/:id/pipeline", async (req, res) => {
 
 
 
+
+app.get('/api/permits/pipeline',loadUser,async(req,res)=>{
+ try{
+  const allowed=['ALL','NEW','CONTACTED','QUALIFIED','PROPOSAL','WON','LOST'];
+  const status=String(req.query.status||'ALL').toUpperCase();
+  if(!allowed.includes(status))return res.status(400).json({error:'잘못된 영업 단계'});
+  const limit=Math.min(100,Math.max(1,Number.parseInt(req.query.limit,10)||50));
+  const offset=Math.max(0,Math.min(100000,Number.parseInt(req.query.offset,10)||0));
+  const args=[String(req.user.id)];
+  let filter='';
+  if(status!=='ALL'){args.push(status);filter=' AND sp.status=$2';}
+  const count=await query(`SELECT COUNT(*)::int AS total FROM sales_pipeline sp JOIN projects p ON p.id=sp.project_id WHERE sp.user_key=$1 AND p.source='arch_hub_permit'${filter}`,args);
+  const rows=await query(`SELECT p.id,p.name,p.address,p.region,p.building_type AS "buildingType",p.stage,p.permit_date AS "permitDate",p.area_sqm AS "areaSqm",p.owner,
+   sp.status,sp.note,sp.updated_at AS "updatedAt"
+   FROM sales_pipeline sp JOIN projects p ON p.id=sp.project_id
+   WHERE sp.user_key=$1 AND p.source='arch_hub_permit'${filter}
+   ORDER BY sp.updated_at DESC,p.id DESC LIMIT $${args.length+1} OFFSET $${args.length+2}`,[...args,limit,offset]);
+  res.json({rows:rows.rows,total:count.rows[0].total,limit,offset});
+ }catch(e){res.status(500).json({error:'건축허가 영업 목록 조회 실패'});}
+});
+
 app.post('/api/permits/leads/:id/pipeline',loadUser,async(req,res)=>{
  if(!/^\d+$/.test(req.params.id))return res.status(400).json({error:'잘못된 현장 ID'});
  const status=String(req.body?.status||'NEW');
