@@ -1115,24 +1115,43 @@ app.get('/api/permits/leads/:id/activities',loadUser,async(req,res)=>{
 });
 
 
+
+app.patch('/api/permits/leads/:id/followup',loadUser,async(req,res)=>{
+ if(!/^\d+$/.test(req.params.id))return res.status(400).json({error:'잘못된 현장 ID'});
+ const raw=req.body?.nextContactDate;
+ if(raw!==null&&raw!==''&&typeof raw!=='string')return res.status(400).json({error:'날짜를 입력하거나 비워 주세요.'});
+ const date=raw||null;
+ if(date!==null&&(!/^\d{4}-\d{2}-\d{2}$/.test(date)||!Number.isFinite(Date.parse(date))||new Date(date).toISOString().slice(0,10)!==date))
+  return res.status(400).json({error:'연락 예정일은 YYYY-MM-DD 형식이어야 합니다.'});
+ try{
+  const updated=await query(`UPDATE sales_pipeline sp SET next_contact_date=$3,updated_at=NOW()
+   FROM projects p WHERE p.id=sp.project_id AND p.source='arch_hub_permit'
+   AND sp.project_id=$1 AND sp.user_key=$2
+   RETURNING sp.project_id AS "projectId",sp.next_contact_date AS "nextContactDate"`,
+   [req.params.id,String(req.user.id),date]);
+  if(!updated.rows.length)return res.status(404).json({error:'등록된 영업 현장이 없습니다.'});
+  res.json({ok:true,...updated.rows[0]});
+ }catch(e){res.status(500).json({error:'연락 예정일 변경 실패'});}
+});
+
 app.get('/api/permits/followups',loadUser,async(req,res)=>{
  try{
   const limit=Math.min(100,Math.max(1,Number.parseInt(req.query.limit,10)||50));
   const offset=Math.max(0,Math.min(100000,Number.parseInt(req.query.offset,10)||0));
   const status=String(req.query.when||'all');
   if(!['all','overdue','today','upcoming'].includes(status))return res.status(400).json({error:'잘못된 일정 필터'});
-  const filters={all:'',overdue:' AND sp.next_contact_date<CURRENT_DATE',today:' AND sp.next_contact_date=CURRENT_DATE',upcoming:' AND sp.next_contact_date>CURRENT_DATE'};
+  const filters={all:'',overdue:" AND sp.next_contact_date<(NOW() AT TIME ZONE 'Asia/Seoul')::date",today:" AND sp.next_contact_date=(NOW() AT TIME ZONE 'Asia/Seoul')::date",upcoming:" AND sp.next_contact_date>(NOW() AT TIME ZONE 'Asia/Seoul')::date"};
   const base="FROM sales_pipeline sp JOIN projects p ON p.id=sp.project_id WHERE sp.user_key=$1 AND p.source='arch_hub_permit' AND sp.next_contact_date IS NOT NULL AND sp.status NOT IN ('WON','LOST')";
   const totals=await query(`SELECT COUNT(*)::int AS total,
-   COUNT(*) FILTER (WHERE sp.next_contact_date<CURRENT_DATE)::int AS overdue,
-   COUNT(*) FILTER (WHERE sp.next_contact_date=CURRENT_DATE)::int AS today,
-   COUNT(*) FILTER (WHERE sp.next_contact_date>CURRENT_DATE)::int AS upcoming ${base}`,[String(req.user.id)]);
+   COUNT(*) FILTER (WHERE sp.next_contact_date<(NOW() AT TIME ZONE 'Asia/Seoul')::date)::int AS overdue,
+   COUNT(*) FILTER (WHERE sp.next_contact_date=(NOW() AT TIME ZONE 'Asia/Seoul')::date)::int AS today,
+   COUNT(*) FILTER (WHERE sp.next_contact_date>(NOW() AT TIME ZONE 'Asia/Seoul')::date)::int AS upcoming ${base}`,[String(req.user.id)]);
   const rows=await query(`SELECT p.id,p.name,p.address,p.region,sp.status,sp.note,
    sp.next_contact_date AS "nextContactDate",sp.updated_at AS "updatedAt"
    ${base}${filters[status]} ORDER BY sp.next_contact_date ASC,p.id DESC LIMIT $2 OFFSET $3`,
    [String(req.user.id),limit,offset]);
   res.json({summary:totals.rows[0],rows:rows.rows,when:status,limit,offset,
-   note:'날짜는 DB 서버의 CURRENT_DATE를 기준으로 계산합니다. 한국시간 기준 여부는 DB 세션 시간대 설정에 따릅니다.'});
+   note:'날짜는 한국 표준시(Asia/Seoul)를 기준으로 계산합니다.'});
  }catch(e){res.status(500).json({error:'영업 연락 일정 조회 실패'});}
 });
 
