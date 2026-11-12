@@ -1114,6 +1114,28 @@ app.get('/api/permits/leads/:id/activities',loadUser,async(req,res)=>{
  }catch(e){res.status(500).json({error:'영업 활동 이력 조회 실패'});}
 });
 
+
+app.get('/api/permits/followups',loadUser,async(req,res)=>{
+ try{
+  const limit=Math.min(100,Math.max(1,Number.parseInt(req.query.limit,10)||50));
+  const offset=Math.max(0,Math.min(100000,Number.parseInt(req.query.offset,10)||0));
+  const status=String(req.query.when||'all');
+  if(!['all','overdue','today','upcoming'].includes(status))return res.status(400).json({error:'잘못된 일정 필터'});
+  const filters={all:'',overdue:' AND sp.next_contact_date<CURRENT_DATE',today:' AND sp.next_contact_date=CURRENT_DATE',upcoming:' AND sp.next_contact_date>CURRENT_DATE'};
+  const base="FROM sales_pipeline sp JOIN projects p ON p.id=sp.project_id WHERE sp.user_key=$1 AND p.source='arch_hub_permit' AND sp.next_contact_date IS NOT NULL AND sp.status NOT IN ('WON','LOST')";
+  const totals=await query(`SELECT COUNT(*)::int AS total,
+   COUNT(*) FILTER (WHERE sp.next_contact_date<CURRENT_DATE)::int AS overdue,
+   COUNT(*) FILTER (WHERE sp.next_contact_date=CURRENT_DATE)::int AS today,
+   COUNT(*) FILTER (WHERE sp.next_contact_date>CURRENT_DATE)::int AS upcoming ${base}`,[String(req.user.id)]);
+  const rows=await query(`SELECT p.id,p.name,p.address,p.region,sp.status,sp.note,
+   sp.next_contact_date AS "nextContactDate",sp.updated_at AS "updatedAt"
+   ${base}${filters[status]} ORDER BY sp.next_contact_date ASC,p.id DESC LIMIT $2 OFFSET $3`,
+   [String(req.user.id),limit,offset]);
+  res.json({summary:totals.rows[0],rows:rows.rows,when:status,limit,offset,
+   note:'날짜는 DB 서버의 CURRENT_DATE를 기준으로 계산합니다. 한국시간 기준 여부는 DB 세션 시간대 설정에 따릅니다.'});
+ }catch(e){res.status(500).json({error:'영업 연락 일정 조회 실패'});}
+});
+
 app.get('/api/permits/pipeline',loadUser,async(req,res)=>{
  try{
   const allowed=['ALL','NEW','CONTACTED','QUALIFIED','PROPOSAL','WON','LOST'];
