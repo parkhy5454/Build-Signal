@@ -453,13 +453,118 @@ app.get('/api/project-groups/:id',async(req,res)=>{
   const g=await query('SELECT * FROM project_groups WHERE id=$1',[req.params.id]);
   if(!g.rowCount)return res.status(404).json({error:'프로젝트를 찾을 수 없습니다.'});
   const notices=await query(`SELECT p.id,p.name AS notice_title,p.building_type,p.stage,p.estimated_cost,p.source_url,p.owner,p.address,
-    COALESCE(json_agg(json_build_object('role',c.role,'organization',c.organization,'department',c.department,'person_name',c.person_name,'phone',c.phone,'email',c.email,'source',c.source,'source_url',c.source_url,'updated_at',c.updated_at)) FILTER (WHERE c.id IS NOT NULL),'[]'::json) AS contacts
+    COALESCE(json_agg(json_build_object('role',c.role,'organization',c.organization,'department',c.department,'person_name',c.person_name,'phone',c.phone,'email',c.email,'source',c.source,'source_url',c.source_url,'verified_at',c.verified_at,'updated_at',c.updated_at)) FILTER (WHERE c.id IS NOT NULL),'[]'::json) AS contacts
     FROM projects p LEFT JOIN project_contacts c ON c.project_id=p.id
     WHERE p.project_group_id=$1 GROUP BY p.id ORDER BY p.updated_at DESC`,[req.params.id]);
-  const contacts=await query('SELECT role,organization,department,person_name,phone,email,source,source_url,updated_at FROM project_group_contacts WHERE group_id=$1 ORDER BY role,updated_at DESC',[req.params.id]);
+  const contacts=await query('SELECT role,organization,department,person_name,phone,email,source,source_url,verified_at,updated_at FROM project_group_contacts WHERE group_id=$1 ORDER BY role,updated_at DESC',[req.params.id]);
   res.json({...g.rows[0],notices:notices.rows,contacts:contacts.rows});
  }catch(e){res.status(500).json({error:e.message});}
 });
+// Read-only monitoring: does not regroup or mutate existing notices.
+app.get('/api/admin/project-groups/health',loadUser,requireAdminRole,async(req,res)=>{
+ try{
+  const summary=await query(`SELECT
+    (SELECT COUNT(*)::int FROM projects WHERE source='g2b_bid') AS total_notices,
+    (SELECT COUNT(*)::int FROM project_groups) AS total_groups,
+    (SELECT COUNT(*)::int FROM projects WHERE source='g2b_bid' AND project_group_id IS NOT NULL) AS linked_notices,
+    (SELECT COUNT(*)::int FROM projects WHERE source='g2b_bid' AND project_group_id IS NULL) AS unlinked_notices,
+    (SELECT COUNT(*)::int FROM project_groups g WHERE EXISTS(SELECT 1 FROM projects p WHERE p.project_group_id=g.id)) AS active_groups`);
+  const recent=await query(`SELECT id,name,owner,region,address,updated_at
+    FROM projects WHERE source='g2b_bid' AND project_group_id IS NULL
+    ORDER BY updated_at DESC NULLS LAST,id DESC LIMIT 40`);
+  const candidates=recent.rows.map(p=>{
+    const identity=projectGroupIdentity({...p,source:'g2b_bid'});
+    return {id:p.id,name:p.name,owner:p.owner,region:p.region,updated_at:p.updated_at,
+      matchable:!!identity,reason:identity?'통합 규칙 충족 (아직 연결되지 않음)':'보수적 매칭 기준 미충족'};
+  });
+  res.json({summary:summary.rows[0],recent_unlinked:candidates,
+    note:'통합 기준은 공고명 말미 공종, 발주처, 지역 및 위치 일치입니다. 이 화면은 읽기 전용입니다.'});
+ }catch(e){res.status(500).json({error:e.message});}
+});
+
+// Preview matching decisions without writing any data.
+app.get('/api/admin/project-groups/preview',loadUser,requireAdminRole,async(req,res)=>{
+ try{
+  const limit=Math.min(100,Math.max(1,Number.parseInt(req.query.limit,10)||40));
+  const cursor=Math.max(0,Number.parseInt(req.query.cursor,10)||0);
+  const r=await query(`SELECT id,source,name,owner,address,region
+    FROM projects WHERE source='g2b_bid' AND project_group_id IS NULL AND id>$1
+    ORDER BY id LIMIT $2`,[cursor,limit]);
+  const identities=r.rows.map(p=>({p,identity:projectGroupIdentity(p)}));
+  const keys=[...new Set(identities.filter(x=>x.identity).map(x=>x.identity.key))];
+  const found=keys.length?await query('SELECT id,group_key,title FROM project_groups WHERE group_key=ANY($1::text[])',[keys]):{rows:[]};
+  const existing=new Map(found.rows.map(g=>[g.group_key,g]));
+  const occurrences=new Map();
+  for(const {identity} of identities){if(identity)occurrences.set(identity.key,(occurrences.get(identity.key)||0)+1);}
+  const rows=identities.map(({p,identity})=>{
+    const group=identity?existing.get(identity.key):null;
+    return {id:p.id,notice_name:p.name,owner:p.owner,region:p.region,
+      proposed_group_name:identity?.title||null,existing_group_id:group?.id||null,
+      status:!identity?'manual_review':group?'existing_group':occurrences.get(identity.key)>1?'new_group_candidate':'unmatched_candidate',
+      explanation:!identity?'명칭·공종·발주처·위치 등 필수 기준 미충족':group?'동일 식별키를 가진 기존 그룹 존재':'기존 그룹 없음: 자동 병합 전 검토 필요'};
+  });
+  res.json({rows,processed:rows.length,next_cursor:r.rows.length?r.rows[r.rows.length-1].id:cursor,done:r.rows.length<limit,read_only:true,
+    warning:'이 미리보기는 DB를 변경하지 않습니다. 같은 페이지에 없는 공고는 후보 집계에 포함되지 않습니다.'});
+ }catch(e){res.status(500).json({error:e.message});}
+});
+
+// Explicit admin approval: only a strict identity-key match to an existing group is accepted.
+app.post('/api/admin/project-groups/approve',loadUser,requireAdminRole,async(req,res)=>{
+ try{
+  const noticeId=Number(req.body?.notice_id),groupId=Number(req.body?.group_id);
+  if(!Number.isSafeInteger(noticeId)||noticeId<=0||!Number.isSafeInteger(groupId)||groupId<=0)
+    return res.status(400).json({error:'유효한 공고 ID와 프로젝트 ID가 필요합니다.'});
+  const p=await query('SELECT id,source,name,owner,address,region,project_group_id FROM projects WHERE id=$1',[noticeId]);
+  if(!p.rowCount)return res.status(404).json({error:'공고를 찾을 수 없습니다.'});
+  if(p.rows[0].project_group_id!==null)return res.status(409).json({error:'이미 연결된 공고입니다. 변경하지 않았습니다.'});
+  const identity=projectGroupIdentity(p.rows[0]);
+  if(!identity)return res.status(422).json({error:'엄격한 자동 매칭 기준을 충족하지 않습니다. 연결하지 않았습니다.'});
+  const updated=await query(`UPDATE projects AS p SET project_group_id=g.id
+    FROM project_groups AS g
+    WHERE p.id=$1 AND p.source='g2b_bid' AND p.project_group_id IS NULL
+      AND g.id=$2 AND g.group_key=$3
+    RETURNING p.id,p.project_group_id`,[noticeId,groupId,identity.key]);
+  if(!updated.rowCount)return res.status(409).json({error:'그룹 식별키 불일치 또는 다른 관리자가 먼저 변경했습니다. 다시 조회하세요.'});
+  console.info('Project group approved', {noticeId,groupId,adminId:req.user?.id});
+  res.json({ok:true,notice_id:noticeId,group_id:groupId});
+ }catch(e){res.status(500).json({error:e.message});}
+});
+
+// Store only attributable, manually reviewed public organization details.
+app.post('/api/admin/project-groups/:id/contacts',loadUser,requireAdminRole,async(req,res)=>{
+ try{
+  const groupId=Number(req.params.id);
+  if(!Number.isSafeInteger(groupId)||groupId<=0)return res.status(400).json({error:'잘못된 프로젝트 ID'});
+  const role=String(req.body?.role||'').trim();
+  const organization=String(req.body?.organization||'').trim().slice(0,200);
+  const department=String(req.body?.department||'').trim().slice(0,120)||null;
+  const personName=String(req.body?.person_name||'').trim().slice(0,100)||null;
+  const phone=String(req.body?.phone||'').trim().slice(0,80)||null;
+  const email=String(req.body?.email||'').trim().slice(0,200)||null;
+  const sourceUrl=String(req.body?.source_url||'').trim().slice(0,1000);
+  if(!['client','designer','supervisor','contractor'].includes(role)||!organization)
+    return res.status(400).json({error:'참여기관 유형과 기관명은 필수입니다.'});
+  let url;
+  try{url=new URL(sourceUrl);}catch{return res.status(400).json({error:'근거가 되는 공개자료 URL을 입력하세요.'});}
+  if(!['http:','https:'].includes(url.protocol)||!url.hostname.includes('.'))
+    return res.status(400).json({error:'HTTP(S) 공개자료 URL만 허용됩니다.'});
+  if(email&&!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
+    return res.status(400).json({error:'이메일 형식을 확인하세요.'});
+  const g=await query('SELECT id FROM project_groups WHERE id=$1',[groupId]);
+  if(!g.rowCount)return res.status(404).json({error:'프로젝트를 찾을 수 없습니다.'});
+  const result=await query(`INSERT INTO project_group_contacts
+    (group_id,role,organization,department,person_name,phone,email,source,source_url)
+    VALUES($1,$2,$3,$4,$5,$6,$7,'manual_public',$8)
+    ON CONFLICT(group_id,role,organization,source) DO UPDATE SET
+      department=EXCLUDED.department,person_name=EXCLUDED.person_name,
+      phone=EXCLUDED.phone,email=EXCLUDED.email,source_url=EXCLUDED.source_url,
+      verified_at=NULL,updated_at=NOW()
+    RETURNING id,group_id,role,organization,source,source_url,verified_at`,
+    [groupId,role,organization,department,personName,phone,email,url.href]);
+  res.status(201).json({ok:true,contact:result.rows[0],note:'출처 URL이 등록되었습니다. 실제 내용의 검증 완료를 의미하지 않습니다.'});
+ }catch(e){res.status(500).json({error:e.message});}
+});
+
 app.post('/api/admin/project-groups/backfill',loadUser,requireAdminRole,async(req,res)=>{
  try{
   const limit=Math.min(500,Math.max(1,parseInt(req.body?.limit,10)||200));
