@@ -53,3 +53,13 @@ test('official developer manifest selects newest supported version and retains i
  let selected='';const request=async url=>{const s=String(url);if(s.includes('infuser'))return {paths:{'/15134260/v1/uddi:aaaa-1111':{get:{summary:'부산광역시_부동산개발업_20240828'}},'/15134260/v1/uddi:bbbb-2222':{get:{summary:'부산광역시_부동산개발업_20260831'}}}};selected=s;return {data:[{상호:'업체','주사무소 소재지':'부산광역시'}],totalCount:1};};
  const rows=await fetchDevelopers({DEVELOPER_DIRECTORY_KEY:'test'},request);assert(selected.includes('bbbb-2222'));assert.equal(rows[0].__directoryDate,'2026-08-31');
 });
+test('configuration changes reset retry scheduling before claiming without revealing the secret',async()=>{
+ const calls=[];let tx=0;const key='test-developer-private-value';
+ const query=async(sql,args)=>{calls.push({sql,args});return {rows:[]};};
+ const worker=createDirectorySync({query,transaction:async()=>{tx++;},env:{DEVELOPER_DIRECTORY_KEY:key}});await worker.run();
+ const change=calls.find(x=>x.args?.[0]==='busan_developers'&&x.sql.includes('config_revision IS DISTINCT'));
+ assert(change);assert.equal(change.args[1].length,64);assert(!JSON.stringify(change).includes(key));
+ assert(change.sql.includes('lease_until<NOW()'));assert(change.sql.includes('next_due_at=NOW()'));
+ const claim=calls.findIndex(x=>x.args?.[0]==='busan_developers'&&x.sql.includes('RETURNING source'));
+ assert(calls.indexOf(change)<claim);assert.equal(tx,0);
+});
