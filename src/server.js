@@ -8,7 +8,7 @@ const PgSession = require("connect-pg-simple")(session);
 const bcrypt = require("bcryptjs");
 const { query, initDb, transaction } = require("./db");
 const { normalizeEvidence,insertEvidence,createEarlyCollector } = require("./early-projects");
-const { createDirectorySync,directoryMatches,SOURCES:directorySources } = require("./organization-directory");
+const { createDirectorySync,directoryMatches,coverageSummary,SOURCES:directorySources } = require("./organization-directory");
 const { profiles, scoreProject } = require("./scoring");
 const { permitDate, permitLifecycle } = require("./archhub");
 const { createAutoIngest } = require("./auto-ingest");
@@ -1178,8 +1178,8 @@ app.get('/api/admin/organization-directory',loadUser,requireAdminRole,async(req,
  try{
   const states=await query('SELECT source,last_attempt_at,last_success_at,next_due_at,last_error,record_count FROM directory_sync_state ORDER BY source');
   const name=String(req.query.q||'').trim();let rows=[];
-  if(name.length>=2){const r=await query('SELECT id,source,organization,address,registration_no,phone,data_date,source_url FROM organization_directory WHERE is_current=TRUE AND organization ILIKE $1 ORDER BY organization,address LIMIT 30',['%'+name.slice(0,100)+'%']);rows=r.rows;}
-  res.json({sources:directorySources,states:states.rows,rows,architectMode:process.env.ARCHITECT_DIRECTORY_KEY?'api':'public_download',developerConfigured:!!process.env.DEVELOPER_DIRECTORY_KEY});
+  if(name.length>=2){const r=await query('SELECT id,source,organization,address,registration_no,phone,data_date,source_url,registration_status FROM organization_directory WHERE is_current=TRUE AND organization ILIKE $1 ORDER BY organization,address LIMIT 30',['%'+name.slice(0,100)+'%']);rows=r.rows;}
+  res.json({sources:directorySources,states:states.rows,rows,coverage:coverageSummary(states.rows),architectMode:process.env.ARCHITECT_DIRECTORY_KEY?'api':'public_download',developerConfigured:!!process.env.DEVELOPER_DIRECTORY_KEY});
  }catch{res.status(500).json({error:'업체 명부 상태 조회 실패'});}
 });
 app.post('/api/admin/party-contact-decisions',loadUser,requireAdminRole,async(req,res)=>{
@@ -1232,7 +1232,7 @@ app.get("/api/projects/:id", async (req, res) => {
     const evidence=await query('SELECT * FROM project_party_evidence WHERE project_id=ANY($1::bigint[]) ORDER BY observed_at DESC,id DESC LIMIT 100',[ids]);
     const phases=await query('SELECT id,name,stage,permit_date,start_date,completion_date,source_updated_at,source_url FROM projects WHERE id=ANY($1::bigint[]) ORDER BY source_updated_at NULLS LAST,id',[ids]);
     const directory=await directoryMatches(query,evidence.rows);
-    res.json({ ...r.rows[0], contacts: contacts.rows,partyEvidence:evidence.rows,companyDirectory:directory,phaseProjects:phases.rows,masterProjectId:masterId,favorite: !!f.rowCount, pipeline: s.rows[0] || { status: "NEW", note: "" } });
+    res.json({ ...r.rows[0], contacts: contacts.rows,partyEvidence:evidence.rows,companyDirectory:directory,directoryCoverage:coverageSummary((await query('SELECT source,last_success_at,last_error,record_count FROM directory_sync_state')).rows),phaseProjects:phases.rows,masterProjectId:masterId,favorite: !!f.rowCount, pipeline: s.rows[0] || { status: "NEW", note: "" } });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

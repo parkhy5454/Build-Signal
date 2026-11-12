@@ -63,3 +63,40 @@ test('configuration changes reset retry scheduling before claiming without revea
  const claim=calls.findIndex(x=>x.args?.[0]==='busan_developers'&&x.sql.includes('RETURNING source'));
  assert(calls.indexOf(change)<claim);assert.equal(tx,0);
 });
+test('four additional publishers select verified current manifests including legacy suffixes',async()=>{
+ const manifests=require('./fixtures/developer-manifests.json');
+ const expected={daegu_developers:'2026-03-03',incheon_developers:'2025-08-26',ulsan_developers:'2025-11-13',chungnam_developers:'2026-06-25'};
+ for(const [source,manifest] of Object.entries(manifests)){
+  let endpoint;const rows=await fetchDevelopers({DEVELOPER_DIRECTORY_KEY:'test'},async url=>{if(String(url).includes('infuser'))return manifest;endpoint=new URL(url);return {totalCount:1,data:[{상호:'검증 업체'}]};},source);
+  assert.equal(rows[0].__directoryDate,expected[source]);assert(endpoint.pathname.startsWith('/api/'+require('../src/organization-directory').SOURCES[source].dataset+'/v1/'));
+ }
+});
+test('publisher office fields and phone availability stay distinct; personal identifier is discarded',()=>{
+ const base={상호:'검증 개발업체',대표자:'검증 대표',부동산개발업등록번호:'시험-001',전화번호:'053-123-4567','주민(법인)번호':'DO-NOT-STORE'};
+ for(const [source,field] of Object.entries({daegu_developers:'주사무소 소재지',incheon_developers:'사무소 소재지',ulsan_developers:'영업소소재지',chungnam_developers:'영업소재지'})){
+  const r=normalizeRecord({...base,[field]:'시험시 시험로 1'},source);assert.equal(r.address,'시험시 시험로 1');assert.equal(r.representative,base.대표자);assert(!JSON.stringify(r).includes('DO-NOT-STORE'));
+  assert.equal(r.phone,['incheon_developers','ulsan_developers'].includes(source)?null:base.전화번호);
+ }
+ assert.throws(()=>normalizeRecord({...base,'현장 주소':'시험시 현장로 1'},'chungnam_developers'),/주소 필드/);
+});
+test('inactive registration blocks sales phone and overrides prior confirmation but honors exclusion',()=>{
+ const row=normalizeRecord({상호:'검증 업체','주사무소 소재지':'시험시 시험로 1',등록상태:'등록취소',전화번호:'053-123-4567'},'daegu_developers');
+ assert.equal(row.phone,null);assert.equal(row.registration_status,'등록취소');
+ assert.equal(matchState({organization:row.organization},{...row,is_current:true},{decision:'confirmed'}).status,'inactive');
+ assert.equal(matchState({},row,{decision:'rejected'}).status,'rejected');
+});
+test('coverage never treats configured source or an empty first attempt as successful national coverage',()=>{
+ const {coverageSummary}=require('../src/organization-directory');
+ const coverage=coverageSummary([{source:'busan_developers',record_count:10,last_success_at:'2026-11-12',last_error:'a private diagnostic'},{source:'daegu_developers',record_count:0,last_error:'requires approval'}]);
+ assert.equal(coverage.find(x=>x.source==='busan_developers').status,'retained');assert.equal(coverage.find(x=>x.source==='daegu_developers').status,'pending');
+ assert.equal(coverage.find(x=>x.source==='incheon_developers').phoneProvided,false);assert(!JSON.stringify(coverage).includes('private diagnostic'));
+ assert(!coverage.some(x=>x.region==='전국'&&x.source!=='architects'));
+});
+test('one region failure does not prevent another region full snapshot activation',async()=>{
+ const activated=[];const env={DEVELOPER_DIRECTORY_KEY:'test'};
+ const query=async(sql,args)=>({rows:sql.includes('RETURNING source')?['daegu_developers','chungnam_developers'].includes(args[0])?[{source:args[0]}]:[]:[{}]});
+ const manifests=require('./fixtures/developer-manifests.json');
+ const request=async url=>{const u=new URL(url);if(u.searchParams.get('namespace')==='15074138/v1')throw Error('publisher unavailable');if(u.hostname==='infuser.odcloud.kr')return manifests.chungnam_developers;return {totalCount:1,data:[{상호:'충남 검증 업체',영업소재지:'충남 시험로 1'}]};};
+ await createDirectorySync({query,env,request,transaction:async fn=>fn(async(sql,args)=>{if(sql.includes('SET is_current='))activated.push(args[0]);return {rows:[{}]};})}).run();
+ assert.deepEqual(activated,['chungnam_developers']);
+});
