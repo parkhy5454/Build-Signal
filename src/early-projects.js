@@ -12,12 +12,14 @@ function normalizeEvidence(input){
  const role=String(input.role||''),organization=clean(input.organization),url=officialUrl(input.source_url);
  const stage=input.stage||'REVIEW',scope=input.contact_scope||'company';
  if(!ROLES.includes(role)||!STAGES.includes(stage)||!organization||organization.length>200||!url||!['company','department','project'].includes(scope))throw Error('역할·업체명·단계·공식 출처 URL을 확인하세요.');
+ const organizationAddress=clean(input.organization_address),registrationNo=clean(input.registration_no);
+ if(organizationAddress.length>500||registrationNo.length>100)throw Error('사업장 주소·등록번호가 너무 깁니다.');
  const phone=clean(input.phone),email=clean(input.email),person=clean(input.person_name),department=clean(input.department),excerpt=clean(input.excerpt);
  if(phone&&!/^[+0-9() .-]{7,40}$/.test(phone))throw Error('전화번호 형식을 확인하세요.');
  if(email&&!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))throw Error('이메일 형식을 확인하세요.');
  if((phone||email)&&excerpt.length<4)throw Error('연락처가 기재된 원문 근거를 입력하세요.');
  if(person.length>100||department.length>120||excerpt.length>1000)throw Error('근거 정보가 너무 깁니다.');
- return {role,organization,source_url:url,stage,contact_scope:scope,phone:phone||null,email:email||null,person_name:person||null,department:department||null,excerpt};
+ return {role,organization,source_url:url,stage,contact_scope:scope,phone:phone||null,email:email||null,person_name:person||null,department:department||null,excerpt,organization_address:organizationAddress||null,registration_no:registrationNo||null};
 }
 function parseUlsan(html){
  const $=cheerio.load(html);const root=$('.bbs-view-content').first();root.find('br').replaceWith('\n');
@@ -73,8 +75,8 @@ async function saveRecords(tx,url,title,bytes,records){
 }
 async function insertEvidence(query,id,e,origin){
  const fingerprint=hash(JSON.stringify([String(id),e]));
- const r=await query(`INSERT INTO project_party_evidence(project_id,role,organization,person_name,department,phone,email,contact_scope,observed_stage,source_url,excerpt,fingerprint,origin)
-  VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) ON CONFLICT(fingerprint) DO NOTHING RETURNING id`,[id,e.role,e.organization,e.person_name,e.department,e.phone,e.email,e.contact_scope,e.stage,e.source_url,e.excerpt,fingerprint,origin]);
+ const r=await query(`INSERT INTO project_party_evidence(project_id,role,organization,person_name,department,phone,email,contact_scope,observed_stage,source_url,excerpt,fingerprint,origin,organization_address,registration_no)
+  VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) ON CONFLICT(fingerprint) DO NOTHING RETURNING id`,[id,e.role,e.organization,e.person_name,e.department,e.phone,e.email,e.contact_scope,e.stage,e.source_url,e.excerpt,fingerprint,origin,e.organization_address||null,e.registration_no||null]);
  return r.rows[0]?.id||null;
 }
 function createEarlyCollector({query,transaction,env=process.env,download=fetchPublic}){
