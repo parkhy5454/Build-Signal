@@ -36,7 +36,8 @@ function contactCard(c){
  const phone=c.phone&&/^[+0-9() .-]{7,25}$/.test(c.phone)?`<a class="contact-link" href="tel:${esc(c.phone.replace(/[^+0-9]/g,''))}">☎ ${esc(c.phone)}</a>`:'<span class="contact-unavailable">전화 미확인</span>';
  const email=c.email&&/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(c.email)?`<a class="contact-link" href="mailto:${esc(c.email)}">✉ ${esc(c.email)}</a>`:'<span class="contact-unavailable">이메일 미확인</span>';
  const url=c.source_url&&/^https?:\/\//i.test(c.source_url)?`<a href="${esc(c.source_url)}" target="_blank" rel="noopener noreferrer">원본 확인 ↗</a>`:'';
- return `<div class="contact-entry"><b>${esc(c.organization)}</b>${contact}<div class="contact-links">${phone}${email}</div><small>출처: ${esc(c.source||'미확인')} · 갱신 ${esc(c.updated_at?String(c.updated_at).slice(0,10):'미확인')} ${url}</small></div>`;
+ const verification=c.verified_at?'검증 기록 '+esc(String(c.verified_at).slice(0,10)):'검증 기록 없음';
+ return `<div class="contact-entry"><b>${esc(c.organization)}</b>${contact}<div class="contact-links">${phone}${email}</div><small>${verification} · 출처: ${esc(c.source||'미확인')} · 갱신 ${esc(c.updated_at?String(c.updated_at).slice(0,10):'미확인')} ${url}</small></div>`;
 }
 window.detail=async id=>{
  try{
@@ -70,9 +71,18 @@ window.groupDetail=async id=>{
  try{
   const g=await api('/api/project-groups/'+id);
   const roles=['client','designer','supervisor','contractor'];
-  const byRole=role=>[...g.contacts,...g.notices.flatMap(n=>(n.contacts||[]))].filter(c=>c.role===role);
+  const allContacts=[...(g.contacts||[]),...(g.notices||[]).flatMap(n=>n.contacts||[])];
+  const uniqueContacts=items=>[...new Map(items.map(c=>[[c.role,c.organization,c.department,c.person_name,c.phone,c.email].map(x=>String(x||'').trim()).join('|'),c])).values()];
+  const byRole=role=>uniqueContacts(allContacts.filter(c=>c.role===role));
   const grouped=roles.map(role=>`<section class="role-section"><div class="role-heading"><h4>${roleLabels[role]}</h4><span class="role-count">${byRole(role).length}개</span></div>${byRole(role).length?byRole(role).map(contactCard).join(''):'<div class="empty-contact">확인된 정보 없음</div>'}</section>`).join('');
-  $('modalBody').innerHTML=`<span class="eyebrow">BUILD SIGNAL · 상위 프로젝트</span><h2 class="project-detail-title">${esc(g.title)}</h2><p class="muted">${esc(g.owner)} · ${esc(g.location)}</p><div class="contact-section-title"><h3>공종별 원본 입찰공고 (${g.notices.length}건)</h3><p>공고명과 공종, 원본 출처를 구분해 표시합니다.</p></div><div class="trade-grid">${g.notices.map(n=>`<article class="trade-notice"><span class="tag">${esc(n.building_type||'공종 미확인')}</span><h4>${esc(n.notice_title)}</h4><p>발주처: ${esc(n.owner||'미확인')}</p><p>담당자 연락처 ${(n.contacts||[]).length}건</p><button class="button light" onclick="detail(${Number(n.id)})">공고 상세 보기</button>${n.source_url&&/^https?:\/\//i.test(n.source_url)?` <a href="${esc(n.source_url)}" target="_blank" rel="noopener noreferrer">원본 ↗</a>`:''}</article>`).join('')}</div><div class="contact-section-title"><h3>프로젝트 통합 담당자 연락처</h3><p>공종별 공고와 프로젝트에 등록된 실제 공개 연락처</p></div><div class="roles-grid">${grouped}</div>`;
+  const notices=(g.notices||[]);
+  const noticeCards=notices.map(n=>{
+    const contacts=uniqueContacts(n.contacts||[]);
+    const hasDirect=contacts.some(c=>c.phone||c.email);
+    return `<article class="trade-notice"><div class="role-heading"><span class="tag">${esc(n.building_type||'공종 미확인')}</span><span class="tag">${hasDirect?'전화·이메일 확보':contacts.length?'기관 정보 확보':'연락처 미확인'}</span></div><h4>${esc(n.notice_title)}</h4><p>발주처: ${esc(n.owner||'미확인')}</p><div class="notice-contact-list">${contacts.length?contacts.map(contactCard).join(''):'<p class="muted">해당 공고에서 확인된 담당자 연락처가 없습니다.</p>'}</div><div class="card-actions"><button class="button light" onclick="detail(${Number(n.id)})">공고 상세 보기</button>${n.source_url&&/^https?:/i.test(n.source_url)?` <a href="${esc(n.source_url)}" target="_blank" rel="noopener noreferrer">원본 공고 보기</a>`:''}</div></article>`;
+  }).join('');
+  const contactCount=uniqueContacts(allContacts).length;
+  $('modalBody').innerHTML=`<span class="eyebrow">BUILD SIGNAL · 상위 프로젝트</span><h2 class="project-detail-title">${esc(g.title)}</h2><p class="muted">${esc(g.owner||'발주처 미확인')} · ${esc(g.location||'위치 미확인')}</p><div class="contact-section-title"><h3>공종별 원본 입찰공고 (${notices.length}건)</h3><p>연락처 ${contactCount}건 · 공고별 담당자와 확인된 출처를 함께 표시합니다. 미확인 정보는 생성하지 않습니다.</p></div><div class="trade-grid">${noticeCards}</div><div class="contact-section-title"><h3>프로젝트 전체 참여기관·연락처</h3><p>발주처·설계사·감리사·시공사별 확인된 정보만 표시합니다.</p></div><div class="roles-grid">${grouped}</div>`;
   $('modal').classList.remove('hidden');
  }catch(e){alert(e.message);}
 };
