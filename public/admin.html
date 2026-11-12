@@ -570,19 +570,23 @@ document.getElementById('permitRegionalBulkCandidates').addEventListener('change
   updatePermitRegionalBulkSelection();
  }
 });
+let permitRegionalBulkSubmitting=false;
 document.getElementById('permitRegionalBulkAdd').addEventListener('click',async()=>{
+ if(permitRegionalBulkSubmitting)return;
  const ids=[...document.querySelectorAll('.permit-regional-bulk:checked')].map(x=>Number(x.value));
  const out=document.getElementById('permitRegionalBulkOutput');
  if(!ids.length){out.textContent='등록할 현장을 선택하세요.';return;}
  if(ids.length>30){out.textContent='한 번에 최대 30건만 등록할 수 있습니다.';return;}
  if(!confirm('선택한 '+ids.length+'개 현장을 신규(NEW) 단계로 등록할까요? 기존 등록 현장은 변경되지 않습니다.'))return;
- const btn=document.getElementById('permitRegionalBulkAdd');btn.disabled=true;
+ const btn=document.getElementById('permitRegionalBulkAdd');permitRegionalBulkSubmitting=true;btn.disabled=true;
+ const requestVersion=permitRegionalQueryVersion;out.textContent='선택 현장 등록 중...';
  try{
   const r=await fetch('/api/permits/leads/pipeline/bulk',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({projectIds:ids})});
   const d=await r.json();if(!r.ok)throw Error(d.error||'일괄 등록 실패');
-  out.textContent='신규 등록 '+d.added+'건 / 이미 등록됨 '+d.alreadyRegistered+'건 / 대상 없음 '+d.notFound+'건. '+d.note;
-  if(d.added>0||d.alreadyRegistered>0){await document.getElementById('permitRegionalLeadsLoad').click();}
- }catch(e){out.textContent=e.message;}finally{btn.disabled=false;}
+  const message='신규 등록 '+d.added+'건 / 이미 등록됨 '+d.alreadyRegistered+'건 / 대상 없음 '+d.notFound+'건. '+d.note;
+  if(requestVersion===permitRegionalQueryVersion && (d.added>0||d.alreadyRegistered>0))await loadPermitRegionalLeads();
+  out.textContent=message;
+ }catch(e){out.textContent=e.message;}finally{permitRegionalBulkSubmitting=false;btn.disabled=false;}
 });
 document.getElementById('permitRegionalLeadChoose').addEventListener('click',()=>{
  const id=document.getElementById('permitRegionalLeadSelect').value;
@@ -628,7 +632,7 @@ for(const id of ['permitRegionalLeadRegion','permitLeadProfile','permitRegionalL
   document.getElementById('permitRegionalLeadsOutput').textContent='조회 조건이 변경됐습니다. 다시 조회하세요.';
  });
 }
-document.getElementById('permitRegionalLeadsLoad').addEventListener('click',async()=>{
+async function loadPermitRegionalLeads(){
  const version=++permitRegionalQueryVersion;
  clearPermitRegionalLeadResults();
  const region=document.getElementById('permitRegionalLeadRegion').value;
@@ -660,7 +664,8 @@ document.getElementById('permitRegionalLeadsLoad').addEventListener('click',asyn
   if(!d.rows.length)lines.push('조회된 현장이 없습니다.');
   lines.push('',d.note);out.textContent=lines.join('\n');
  }catch(e){if(version===permitRegionalQueryVersion){clearPermitRegionalLeadResults();out.textContent=e.message;}}
-});
+}
+document.getElementById('permitRegionalLeadsLoad').addEventListener('click',loadPermitRegionalLeads);
 document.getElementById('permitIngestionSummaryLoad').addEventListener('click',async()=>{
  const out=document.getElementById('permitIngestionSummaryOutput'),days=document.getElementById('permitIngestionSummaryDays').value;
  out.textContent='건축허가 수집 통계 조회 중...';
