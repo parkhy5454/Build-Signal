@@ -130,3 +130,22 @@ $("q").addEventListener("keydown",e=>{if(e.key==="Enter")search(1);});
     showPage(location.hash.slice(1)||'dashboard');
   } catch(e) { location.replace('/login.html'); }
 })();
+
+async function loadAutomaticFreshness(){
+ const out=$('autoFreshness');
+ try{
+  const d=await api('/api/ingestion/freshness');
+  const time=v=>v?new Date(v).toLocaleString('ko-KR',{timeZone:'Asia/Seoul'}):'아직 없음';
+  const parts=[d.enabled?'서버 자동 갱신 활성':'서버 자동 갱신 중지'];
+  for(const row of d.sources){
+   const label=row.source==='bids'?'나라장터 입찰':'국토부 인허가·착공·준공';
+   const running=row.lease_until&&new Date(row.lease_until)>new Date();
+   parts.push(label+': '+(!d.configured[row.source]?'인증키 설정 필요':running?'수집 중':row.last_error?'재시도 대기':'예약 대기')+' / 마지막 처리 성공 '+time(row.last_success_at));
+  }
+  parts.push('국토부 자동 수집 대상 '+fmt(d.coverage.regions)+'개 지역 / 전체 페이지 순회 완료 '+fmt(d.coverage.completed_regions)+'개');
+  parts.push('등록된 지역을 순회합니다. 원천 반영 주기와 호출 한도에 따라 갱신이 지연될 수 있습니다.');
+  out.textContent=parts.join(' · ');
+ }catch(e){out.textContent='자동 갱신 상태를 확인하지 못했습니다. 잠시 후 다시 확인해 주세요.';}
+}
+loadAutomaticFreshness();
+setInterval(()=>{if(!document.hidden)loadAutomaticFreshness();},60000);

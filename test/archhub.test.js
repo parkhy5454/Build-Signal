@@ -17,8 +17,9 @@ function harness(items,options={}){
  const source=fs.readFileSync(require.resolve('../src/server'),'utf8');
  const stored=new Map(),urls=[];
  const ctx={permitLifecycle,permitDate,URL,AbortSignal,process:{env:{ARCH_HUB_SERVICE_KEY:'test-key'}},savePermitJob:async()=>{},
-  fetch:async url=>{urls.push(new URL(url));return {ok:true,text:async()=>JSON.stringify({response:{header:{resultCode:options.error||'00'},body:{items:{item:items},totalCount:items.length}}})};},
+  fetch:async url=>{urls.push(new URL(url));return {ok:true,text:async()=>JSON.stringify({response:{header:{resultCode:options.error||'00'},body:{items:{item:items},totalCount:options.total??items.length}}})};},
   query:async(sql,args)=>{
+   if(sql.includes("INSERT INTO auto_permit_regions"))return {rows:[]};
    assert.equal(args.length,13);assert(sql.includes('completion_date=COALESCE(EXCLUDED.completion_date,projects.completion_date)'));
    const old=stored.get(args[0]),dates=[args[7]||old?.dates[0],args[8]||old?.dates[1],args[9]||old?.dates[2]];
    const stage=dates[2]?'COMPLETED':dates[1]?'STARTED':dates[0]?'PERMIT':'UNKNOWN';
@@ -55,4 +56,10 @@ test('first-load mode still requires valid region codes; date mode keeps its 30-
  assert.equal(call({sigunguCd:'11680',bjdongCd:'10300',startDate:'20260101',endDate:'20260301'}).code,400);
  const r=call({sigunguCd:'11680',bjdongCd:'10300',initialLoad:true});assert.equal(r.code,202);
  await new Promise(resolve=>setImmediate(resolve));assert.equal(lastOpts.startDate,undefined);
+});
+test('automatic page continuation passes 2,000 records without resetting to page one',async()=>{
+ const items=Array.from({length:100},(_,n)=>({mgmPmsrgstPk:String(n),platPlc:'서울특별시 강남구',archPmsDay:'20260101'}));
+ const h=harness(items,{total:5000});const job=await h.run({automatic:true,startPage:21,pageBudget:1});
+ assert.equal(h.urls[0].searchParams.get('pageNo'),'21');assert.equal(job.status,'completed');
+ assert.equal(job.hasMore,true);assert.equal(job.nextPage,22);
 });
