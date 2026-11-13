@@ -23,6 +23,7 @@ jobs:
       - name: Check client JavaScript
         run: |
           node --check public/app.js
+          node --check public/project-workspace.js
           node --check public/national-coverage.js
           node --check public/national-review.js
       - name: Check admin inline script

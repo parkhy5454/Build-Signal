@@ -1,6 +1,6 @@
 const stageLabel={REVIEW:"심의·환경평가",PERMIT:"인허가",STARTED:"착공",COMPLETED:"준공",BID:"입찰",UNKNOWN:"확인 필요"};
 const $=id=>document.getElementById(id);
-let currentPage="dashboard",searchPage=1,searchTotalPages=1;
+let currentPage="projects",searchPage=1,searchTotalPages=1,searchRequest=0,lastSearchRows=[];
 function esc(s){return String(s??"-").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
 function stageSearch(value){return ({심의:"REVIEW",환경평가:"REVIEW",환경영향평가:"REVIEW",공람:"REVIEW",인허가:"PERMIT",허가:"PERMIT",착공:"STARTED",준공:"COMPLETED",사용승인:"COMPLETED",입찰:"BID"})[String(value).trim()]||"";}
 function emptyProjectSearch(d){
@@ -13,7 +13,7 @@ function fmt(n){return Number(n||0).toLocaleString("ko-KR");}
 function displayStage(p){return p.source==='environment_review'&&p.stage==='REVIEW'?'환경평가 공람(공개 시점)':stageLabel[p.stage]||'확인 필요';}
 function card(p,score){
  const badges=[p.party_count?`<span class="signal-tag">참여업체 근거 ${fmt(p.party_count)}건</span>`:'',p.has_phone?'<span class="signal-tag success">☎ 전화 확보</span>':'',p.has_email?'<span class="signal-tag success">✉ 이메일 확보</span>':'',p.contact_count>0?`<span class="signal-tag">${fmt(p.contact_count)}개 연락처</span>`:''].filter(Boolean).join('');
- return `<article class="project-card"><div class="project-main"><div class="project-topline"><span class="tag ${p.stage==="STARTED"?"green":""}">${esc(displayStage(p))}</span><span class="project-source">${esc(p.source==='g2b_bid'?'나라장터 실제 공고':p.source==='demo'?'데모 데이터':p.source==='arch_hub_permit'?'건축HUB 인허가':p.source==='public_review'?'지자체 심의자료':p.source==='document_review'?'공식 심의 PDF 원문':p.source==='seoul_review'?'서울시 건축위원회 의결조서':p.source==='environment_review'?'국립환경과학원 EIASS 공개자료':p.source||'')}</span></div><h4>${esc(p.name)}</h4><p>${esc(p.address||"현장 주소 확인 중")}</p><div class="meta"><span>${p.owner?'발주처':p.owner_evidence?'건축주(원문 추출)':p.applicant_evidence?'심의 신청인(원문 추출)':p.developer_evidence?'사업시행자(원문 추출)':'건축주'}: ${esc(p.owner||p.owner_evidence||p.applicant_evidence||p.developer_evidence||(p.source==='seoul_review'?'원문 미제공':'확인 중'))}</span><span>공종: ${esc(p.building_type||"미확인")}</span><span>${esc(p.region||"")}</span></div><div class="signal-tags">${p.source==='document_review'&&p.review_source_current===false?'<span class="signal-tag">과거 원문 기록 · 현재 안건 재확인 필요</span>':''}${p.architectural_review_result?'<span class="signal-tag">'+esc(p.architectural_review_result)+'</span>':''}${badges||'<span class="signal-tag muted-tag">연락처 확인 중</span>'}</div></div><div class="card-actions">${score!==undefined?`<span class="score">${score}점</span>`:""}<button class="button primary" onclick="detail(${Number(p.id)})">상세·연락처 보기</button></div></article>`;
+ return `<article class="project-card"><div class="project-main"><div class="project-topline"><span class="tag ${p.stage==="STARTED"?"green":""}">${esc(displayStage(p))}</span><span class="project-source">${esc(p.source==='g2b_bid'?'나라장터 실제 공고':p.source==='demo'?'데모 데이터':p.source==='arch_hub_permit'?'건축HUB 인허가':p.source==='public_review'?'지자체 심의자료':p.source==='document_review'?'공식 심의 PDF 원문':p.source==='seoul_review'?'서울시 건축위원회 의결조서':p.source==='environment_review'?'국립환경과학원 EIASS 공개자료':p.source||'')}</span></div><h4>${esc(p.name)}</h4><p>${esc(p.address||"현장 주소 확인 중")}</p><div class="meta"><span>${p.owner?'발주처':p.owner_evidence?'건축주(원문 추출)':p.applicant_evidence?'심의 신청인(원문 추출)':p.developer_evidence?'사업시행자(원문 추출)':'건축주'}: ${esc(p.owner||p.owner_evidence||p.applicant_evidence||p.developer_evidence||(p.source==='seoul_review'?'원문 미제공':'확인 중'))}</span><span>공종: ${esc(p.building_type||"미확인")} · 연면적: ${esc(ProjectWorkspace.area(p))}</span><span>${esc(p.region||"")}</span></div><div class="signal-tags">${p.source==='document_review'&&p.review_source_current===false?'<span class="signal-tag">과거 원문 기록 · 현재 안건 재확인 필요</span>':''}${p.architectural_review_result?'<span class="signal-tag">'+esc(p.architectural_review_result)+'</span>':''}${badges||'<span class="signal-tag muted-tag">연락처 확인 중</span>'}</div></div><div class="card-actions">${score!==undefined?`<span class="score">${score}점</span>`:""}<button class="button primary" onclick="detail(${Number(p.id)})">상세·연락처 보기</button></div></article>`;
 }
 async function api(url,opts){const r=await fetch(url,opts);const d=await r.json();if(!r.ok)throw new Error(d.error||"요청에 실패했습니다.");return d;}
 async function contactSummary(){
@@ -25,21 +25,22 @@ async function contactSummary(){
 }
 async function dashboard(){try{const d=await api("/api/dashboard");$("total").textContent=fmt(d.total);const m=Object.fromEntries(d.byStage.map(x=>[x.stage,x.n]));$("permit").textContent=fmt(m.PERMIT);$("started").textContent=fmt(m.STARTED);$("favoritesCount").textContent=fmt(d.favorites);$("demoNotice").hidden=!d.demo;contactSummary();$("recent").innerHTML=d.recent.length?d.recent.map(p=>card(p)).join(""):'<div class="panel">등록된 현장이 없습니다. 실제 데이터 또는 데모 데이터를 적재해 주세요.</div>'; }catch(e){$("recent").innerHTML=`<div class="notice">${esc(e.message)}</div>`;}}
 async function search(page=1){
- searchPage=Math.max(1,page);
+ searchPage=Math.max(1,page);const request=++searchRequest;lastSearchRows=[];$('exportPage').disabled=true;$('projectResults').setAttribute('aria-busy','true');$('resultCount').textContent='검색 조건에 맞는 프로젝트를 찾는 중입니다.';
  const period=$("searchPeriod").value;
  const today=new Date();const localDay=d=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
  const fromDate=new Date(today.getFullYear(),today.getMonth(),today.getDate()-(Number(period)||0)+1);
  const from=period==="custom"?$("searchFrom").value:period?localDay(fromDate):"";
  const to=period==="custom"?$("searchTo").value:period?localDay(today):"";
- const params=new URLSearchParams({dateField:$("dateField").value,from,to,q:$("q").value,region:$("region").value,stage:$("stage").value,type:$("type").value,contact:$("contactFilter").value,page:String(searchPage),limit:"30"});
+ const params=new URLSearchParams({dateField:$("dateField").value,from,to,q:$("q").value,region:$("region").value,stage:$("stage").value==='EARLY'?'':$("stage").value,phase:$("stage").value==='EARLY'?'early':'',minArea:$("minArea").value,unknownArea:$("unknownArea").checked?'1':'0',sort:$("projectSort").value,type:$("type").value,contact:$("contactFilter").value,page:String(searchPage),limit:"30"});
  try{
-  const d=await api("/api/projects?"+params);
+  const d=await api("/api/projects?"+params);if(request!==searchRequest)return;lastSearchRows=d.rows;
   searchTotalPages=Math.max(1,d.pages||1);
+  $("resultCountSummary").textContent=fmt(d.total)+"건";$("exportPage").disabled=!d.rows.length;updateFilterSummary();
   $("resultCount").textContent=`총 ${fmt(d.total)}건 · ${d.page}/${searchTotalPages} 페이지`;
-  $("projectResults").innerHTML=d.rows.length?d.rows.map(p=>card(p)).join(""):emptyProjectSearch(d);
+  $("projectResults").innerHTML=d.rows.length?ProjectWorkspace.render(d.rows,card,displayStage):emptyProjectSearch(d);
   $("pageInfo").textContent=`${d.page} / ${searchTotalPages}`;
   $("prevPage").disabled=searchPage<=1;$("nextPage").disabled=searchPage>=searchTotalPages;
- }catch(e){$("projectResults").innerHTML=`<div class="notice">${esc(e.message)}</div>`;}
+ }catch(e){if(request!==searchRequest)return;$("projectResults").innerHTML=`<div class="notice">${esc(e.message)}</div>`;$("resultCount").textContent="검색하지 못했습니다. 다시 시도해 주세요.";$("resultCountSummary").textContent="—";}finally{if(request===searchRequest)$("projectResults").setAttribute("aria-busy","false");}
 }
 async function recommendations(){try{const d=await api("/api/recommendations?profile="+$("profile").value);$("recommendResults").innerHTML=d.rows.length?d.rows.map(p=>card(p,p.score)).join(""):'<div class="panel">추천할 현장이 없습니다.</div>';}catch(e){$("recommendResults").innerHTML=`<div class="notice">${esc(e.message)}</div>`;}}
 async function favorites(){try{const d=await api("/api/favorites");$("favoriteResults").innerHTML=d.rows.length?d.rows.map(p=>card(p)).join(""):'<div class="panel">관심 현장이 없습니다. 현장 상세에서 ☆ 관심 등록을 눌러주세요.</div>';}catch(e){$("favoriteResults").innerHTML=`<div class="notice">${esc(e.message)}</div>`;}}
@@ -110,7 +111,7 @@ window.groupDetail=async id=>{
  }catch(e){alert(e.message);}
 };
 
-function showPage(page){currentPage=page;document.querySelectorAll(".page").forEach(x=>x.classList.toggle("active",x.id===page));document.querySelectorAll("nav a").forEach(x=>x.classList.toggle("active",x.dataset.page===(page==="groups"?"projects":page)));$("pageTitle").textContent=({dashboard:"대시보드",groups:"건설 프로젝트 통합 검색",projects:"건설 프로젝트 통합 검색",recommend:"AI 영업 추천",favorites:"관심 현장"})[page]||"BUILD SIGNAL";if(page==="groups")groups(1);if(page==="projects")search(1);if(page==="recommend")recommendations();if(page==="favorites")favorites();if(page==="dashboard")dashboard();}
+function showPage(page){if(!["dashboard","groups","projects","recommend","favorites"].includes(page))page="projects";currentPage=page;document.querySelectorAll(".page").forEach(x=>x.classList.toggle("active",x.id===page));document.querySelectorAll("nav a").forEach(x=>x.classList.toggle("active",x.dataset.page===page));$("pageTitle").textContent=({dashboard:"대시보드",groups:"입찰 DB",projects:"건설 프로젝트",recommend:"영업 추천",favorites:"관심·영업관리"})[page]||"BUILD SIGNAL";if(page==="groups")groups(1);if(page==="projects")search(1);if(page==="recommend")recommendations();if(page==="favorites")favorites();if(page==="dashboard")dashboard();}
 document.querySelectorAll("[data-search-tab]").forEach(btn=>btn.addEventListener("click",()=>{history.replaceState(null,"","#"+btn.dataset.searchTab);showPage(btn.dataset.searchTab);}));
 document.querySelectorAll("[data-page],[data-go]").forEach(a=>a.addEventListener("click",e=>{e.preventDefault();const p=a.dataset.page||a.dataset.go;history.replaceState(null,"","#"+p);showPage(p);}));
 $('groupSearchBtn').onclick=()=>groups(1);
@@ -119,21 +120,21 @@ $('groupPrev').onclick=()=>{if(groupPage>1)groups(groupPage-1);};
 $('groupNext').onclick=()=>{if(groupPage<groupPages)groups(groupPage+1);};
 $("searchPeriod").onchange=()=>{const custom=$("searchPeriod").value==="custom";$("searchFromWrap").hidden=!custom;$("searchToWrap").hidden=!custom;search(1);};
 $("dateField").onchange=()=>search(1);
-$("searchBtn").onclick=()=>search(1);
+$("projectSearchForm").addEventListener("submit",e=>{e.preventDefault();search(1);});
 $("prevPage").onclick=()=>{if(searchPage>1)search(searchPage-1);};
 $("nextPage").onclick=()=>{if(searchPage<searchTotalPages)search(searchPage+1);};$("recommendBtn").onclick=recommendations;$("closeModal").onclick=()=>$("modal").classList.add("hidden");$("modal").onclick=e=>{if(e.target===$("modal"))$("modal").classList.add("hidden");};
-$("q").addEventListener("keydown",e=>{if(e.key==="Enter")search(1);});
+
 (async()=>{
   try {
     const me=await api('/api/me');
     const actions=document.querySelector('.top-actions');
     if(actions){
       const who=document.createElement('span');who.className='pill';who.textContent=me.user.company_name||me.user.email;actions.prepend(who);
-      if(me.user.role==='admin'){const a=document.createElement('a');a.className='button light';a.href='/admin.html';a.textContent='회원관리';actions.append(a);}
+      if(me.user.role==='admin'){const a=document.createElement('a');a.className='button light';a.href='/admin.html';a.textContent='관리자';actions.append(a);}
       const out=document.createElement('button');out.className='button light';out.textContent='로그아웃';out.onclick=async()=>{await fetch('/api/logout',{method:'POST'});location.href='/login.html';};actions.append(out);
     }
     await loadRegionChoices();
-    showPage(location.hash.slice(1)||'dashboard');
+    showPage(location.hash.slice(1)||'projects');
     const projectId=new URLSearchParams(location.search).get('projectId');if(projectId&&/^[1-9]\d*$/.test(projectId))detail(projectId);
   } catch(e) { location.replace('/login.html'); }
 })();
@@ -201,3 +202,13 @@ function architecturalReviewHtml(rows){
  if(!rows.length)return '';
  return '<section><h3>건축위원회 심의의결 기록</h3><p>심의 결과는 건축허가·착공 완료와 구분합니다. 공개 의결조서에 참여업체·담당 연락처가 없으면 임의로 채우지 않습니다.</p>'+rows.map(r=>'<p>'+esc(r.committee_name)+' · 심의일 '+esc(String(r.review_date||'미제공').slice(0,10))+'<br>의결번호 '+esc(r.decision_no)+' · 결과 '+esc(r.decision_result)+'<br><a href="'+esc(r.post_url)+'" target="_blank" rel="noopener noreferrer">공식 심의 공개 게시물</a></p>').join('')+'</section>';
 }
+
+function updateFilterSummary(){
+ const labels=[];if($('region').value)labels.push($('region').selectedOptions[0].textContent);if($('stage').value)labels.push($('stage').selectedOptions[0].textContent);if($('type').value)labels.push('용도 '+$('type').value);if($('minArea').value)labels.push('연면적 '+fmt($('minArea').value)+'㎡ 이상'+($('unknownArea').checked?' · 미확인 포함':' · 미확인 제외'));if($('contactFilter').value)labels.push($('contactFilter').selectedOptions[0].textContent);if($('q').value)labels.push('검색어 '+$('q').value);
+ $('activeFilterSummary').textContent=labels.length?labels.join(' / '):'전체 지역 · 전체 단계 · 규모 제한 없음';
+ document.querySelectorAll('[data-quick]').forEach(b=>{const k=b.dataset.quick;const on=k==='large'?$('minArea').value==='10000':k==='early'?$('stage').value==='EARLY':k==='hotel'?$('type').value==='숙박시설':k==='office'?$('type').value==='업무시설':k==='designer'?$('contactFilter').value==='designer':$('searchPeriod').value==='30'&&$('dateField').value==='collected';b.classList.toggle('selected',on);b.setAttribute('aria-pressed',String(on));});
+}
+for(const id of ['minArea','unknownArea','projectSort','stage','contactFilter'])$(id).addEventListener('change',()=>search(1));
+$('resetSearch').addEventListener('click',()=>{$('projectSearchForm').reset();$('projectSort').value='priority';$('searchFromWrap').hidden=true;$('searchToWrap').hidden=true;search(1);});
+document.querySelectorAll('[data-quick]').forEach(b=>b.addEventListener('click',()=>{const k=b.dataset.quick;if(k==='large')$('minArea').value=$('minArea').value==='10000'?'':'10000';if(k==='early')$('stage').value=$('stage').value==='EARLY'?'':'EARLY';if(k==='hotel'||k==='office'){const v=k==='hotel'?'숙박시설':'업무시설';$('type').value=$('type').value===v?'':v;}if(k==='designer')$('contactFilter').value=$('contactFilter').value==='designer'?'':'designer';if(k==='recent'){$('searchPeriod').value=$('searchPeriod').value==='30'?'':'30';$('dateField').value='collected';$('searchFromWrap').hidden=true;$('searchToWrap').hidden=true;}search(1);}));
+$('exportPage').addEventListener('click',()=>{if(!lastSearchRows.length)return;const blob=new Blob([ProjectWorkspace.csv(lastSearchRows,displayStage)],{type:'text/csv;charset=utf-8;'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download='BUILD-SIGNAL_현재페이지.csv';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);});
