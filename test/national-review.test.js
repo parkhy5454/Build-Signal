@@ -53,6 +53,7 @@ test('PostgreSQL worker rotates nationwide, isolates one failed filter, resumes 
   let status=200,body;const response={status(n){status=n;return this;},json(v){body=v;}};
   await handlers['/api/review-notices']({query:{region:'경기도',q:'건축'}},response);assert.equal(status,200);assert.equal(body.total,1);assert(body.rows[0].publisher_region.includes('경기도'));
   await handlers['/api/review-notices']({query:{q:"' OR TRUE --"}},response);assert.equal(body.total,0);
+  await query("UPDATE national_review_notices SET status='pending'");await handlers['/api/review-notices']({query:{}},response);assert.equal(body.rows[0].original_url,null);await query("UPDATE national_review_notices SET status='checked'");
   await handlers['/api/review-notices/coverage']({},response);assert.equal(body.streams.length,19);assert(body.counts.length>0);
   failRegion=false;await query("UPDATE national_review_streams SET retry_at=NOW() WHERE id='002'");await run();assert.equal((await query("SELECT last_error FROM national_review_streams WHERE id='002'")).rows[0].last_error,null);
   await query('UPDATE national_review_streams SET next_archive_at=NOW()');const before=(await query('SELECT id,archive_page FROM national_review_streams ORDER BY id')).rows;

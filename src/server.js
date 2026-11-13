@@ -1886,7 +1886,7 @@ app.get('/api/review-notices',async(req,res)=>{
   const page=Math.max(1,Math.min(10000,parseInt(req.query.page,10)||1)),region=String(req.query.region||'').trim(),keyword=String(req.query.q||'').trim().slice(0,100);
   const aliases=regionAliases(region),args=[aliases,keyword],where="($1::text[]='{}'::text[] OR EXISTS(SELECT 1 FROM national_review_notice_regions nr WHERE nr.doc_id=national_review_notices.doc_id AND nr.region=ANY($1::text[]))) AND ($2::text='' OR title ILIKE '%'||$2||'%' OR publisher ILIKE '%'||$2||'%')";
   const count=await query('SELECT COUNT(*)::int n FROM national_review_notices WHERE '+where,args);
-  const rows=await query(`SELECT doc_id,title,publisher,(SELECT string_agg(region,', ' ORDER BY region) FROM national_review_notice_regions nr WHERE nr.doc_id=national_review_notices.doc_id) AS publisher_region,published_date,index_url,original_url,status,last_checked_at FROM national_review_notices WHERE ${where} ORDER BY published_date DESC,doc_id LIMIT 20 OFFSET $3`,[...args,(page-1)*20]);
+  const rows=await query(`SELECT doc_id,title,publisher,(SELECT string_agg(region,', ' ORDER BY region) FROM national_review_notice_regions nr WHERE nr.doc_id=national_review_notices.doc_id) AS publisher_region,published_date,index_url,CASE WHEN status='checked' THEN original_url ELSE NULL END AS original_url,status,last_checked_at FROM national_review_notices WHERE ${where} ORDER BY published_date DESC,doc_id LIMIT 20 OFFSET $3`,[...args,(page-1)*20]);
   res.json({rows:rows.rows,total:count.rows[0].n,page,pageSize:20,note:'전국 지방정책정보 색인에 공개된 심의 문서입니다. 발행기관 지역은 현장 위치와 다르며, 문서 수는 프로젝트·참여업체 확보 건수가 아닙니다.'});
  }catch{res.status(500).json({error:'전국 심의 공개문서 조회 실패'});}
 });
