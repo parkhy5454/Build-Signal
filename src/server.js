@@ -21,6 +21,9 @@ const {createReviewExtractor}=require("./review-extraction");
 const {createSeoulCollector}=require("./seoul-review");
 const { meta:regionCatalogMeta,provinces,regionAliases,installRegionCatalog } = require("./region-catalog");
 
+const {createAwardCollector,awardKey}=require("./awards");
+const {registerAwardRoutes}=require("./award-routes");
+
 const app = express();
 // Render terminates HTTPS at its proxy; trust the proxy so secure session cookies are issued.
 app.set("trust proxy", 1);
@@ -1237,6 +1240,7 @@ app.get("/api/projects/:id", async (req, res) => {
     if (!r.rowCount) return res.status(404).json({ error: "현장을 찾을 수 없습니다." });
     const f = await query("SELECT id FROM favorites WHERE project_id=$1 AND user_key=$2", [req.params.id, String(req.user.id)]);
     const s = await query("SELECT status,note FROM sales_pipeline WHERE project_id=$1 AND user_key=$2", [req.params.id, String(req.user.id)]);
+    const awards=await query(`SELECT a.* FROM construction_awards a JOIN projects p ON p.source='g2b_bid' AND p.external_id=a.notice_no||'-'||a.notice_ord WHERE p.id=$1 ORDER BY a.award_date DESC NULLS LAST,a.id DESC LIMIT 100`,[req.params.id]);
     const contacts = await query(`SELECT role,organization,department,person_name,phone,email,source,source_url,verified_at,updated_at
       FROM project_contacts WHERE project_id=$1 ORDER BY CASE role WHEN 'client' THEN 1 WHEN 'designer' THEN 2 WHEN 'supervisor' THEN 3 ELSE 4 END, updated_at DESC`,[req.params.id]);
     const master=await query('SELECT permit_id FROM project_phase_links WHERE early_id=$1',[req.params.id]);
@@ -1248,7 +1252,7 @@ app.get("/api/projects/:id", async (req, res) => {
     const directory=await directoryMatches(query,evidence.rows);
     const architecture=await query('SELECT a.*,p.source_updated_at AS review_date FROM architectural_review_details a JOIN projects p ON p.id=a.project_id WHERE a.project_id=ANY($1::bigint[])',[ids]);
     const environmental=await query('SELECT e.*,p.source_updated_at AS notice_date FROM environment_review_details e JOIN projects p ON p.id=e.project_id WHERE e.project_id=ANY($1::bigint[])',[ids]);
-    res.json({ ...r.rows[0], contacts: contacts.rows,partyEvidence:evidence.rows,companyDirectory:directory,environmentalReviews:environmental.rows,architecturalReviews:architecture.rows,directoryCoverage:coverageSummary((await query('SELECT source,last_success_at,last_error,record_count FROM directory_sync_state')).rows),phaseProjects:phases.rows,masterProjectId:masterId,favorite: !!f.rowCount, pipeline: s.rows[0] || { status: "NEW", note: "" } });
+    res.json({ ...r.rows[0], contacts: contacts.rows,awards:awards.rows,partyEvidence:evidence.rows,companyDirectory:directory,environmentalReviews:environmental.rows,architecturalReviews:architecture.rows,directoryCoverage:coverageSummary((await query('SELECT source,last_success_at,last_error,record_count FROM directory_sync_state')).rows),phaseProjects:phases.rows,masterProjectId:masterId,favorite: !!f.rowCount, pipeline: s.rows[0] || { status: "NEW", note: "" } });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -1852,6 +1856,8 @@ app.post("/api/admin/demo-seed", requireAdmin, async (req,res) => {
 });
 
 app.get("/login", (req,res)=>res.sendFile(path.join(__dirname,"..","public","login.html")));
+const awardCollector=createAwardCollector({query,transaction});
+registerAwardRoutes(app,{query,regionAliases});
 const earlyCollector=createEarlyCollector({query,transaction});
 const directorySync=createDirectorySync({query,transaction});
 const environmentCollector=createEnvironmentCollector({query,transaction});
@@ -1931,7 +1937,7 @@ app.get('/api/ingestion/freshness',async(req,res)=>{
    (SELECT COUNT(*)::int FROM seoul_review_files WHERE status='processed') AS processed_files,
    (SELECT COUNT(*)::int FROM seoul_review_files WHERE status='error') AS failed_files
    FROM seoul_review_state s WHERE id=1`);
-  res.json({enabled:automaticIngest.enabled(),configured:{permits:!!process.env.ARCH_HUB_SERVICE_KEY,bids:!!process.env.G2B_SERVICE_KEY,early:true,environment_review:true,seoul_review:true,national_review:true,review_extract:true},sources:states.rows,coverage:coverage.rows[0],seoulReview:seoulReview.rows[0],catalogDate:regionCatalogMeta.retrievedOn,
+  res.json({enabled:automaticIngest.enabled(),configured:{permits:!!process.env.ARCH_HUB_SERVICE_KEY,bids:!!process.env.G2B_SERVICE_KEY,awards:!!awardKey(),early:true,environment_review:true,seoul_review:true,national_review:true,review_extract:true},sources:states.rows,coverage:coverage.rows[0],seoulReview:seoulReview.rows[0],catalogDate:regionCatalogMeta.retrievedOn,
    note:'국토부는 내장된 전국 공식 지역코드로 순회 적재합니다. 지역 선택은 저장된 자료를 필터링하며, 지역별 수집 완료를 의미하지 않습니다. 처리량과 원천 반영 주기에 따라 지연될 수 있습니다.'});
  }catch{res.status(500).json({error:'자동 수집 현황 조회 실패'});}
 });
@@ -1946,6 +1952,6 @@ async function start() {
       ON CONFLICT(email) DO UPDATE SET password_hash=EXCLUDED.password_hash,role='admin',status='approved'`,[email,hash]);
   }
   const port = process.env.PORT || 10000;
-  app.listen(port, () => {console.log(`BUILD SIGNAL listening on ${port}`);automaticIngest.start();earlyCollector.start();directorySync.start();environmentCollector.start();seoulCollector.start();nationalReviewCollector.start();reviewExtractor.start();});
+  app.listen(port, () => {console.log(`BUILD SIGNAL listening on ${port}`);automaticIngest.start();awardCollector.start();earlyCollector.start();directorySync.start();environmentCollector.start();seoulCollector.start();nationalReviewCollector.start();reviewExtractor.start();});
 }
 start().catch(e => { console.error("Startup failed:", e); process.exit(1); });

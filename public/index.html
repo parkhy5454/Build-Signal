@@ -12,6 +12,7 @@
   <nav aria-label="주요 메뉴">
     <a class="active" href="#projects" data-page="projects"><span class="nav-icon">▦</span> 프로젝트 DB</a>
     <a href="#groups" data-page="groups"><span class="nav-icon">▤</span> 입찰 DB</a>
+    <a href="#awards" data-page="awards"><span class="nav-icon">♜</span> 수주·낙찰 DB</a>
     <a href="#favorites" data-page="favorites"><span class="nav-icon">☆</span> 관심·영업관리</a>
     <a href="#recommend" data-page="recommend"><span class="nav-icon">↗</span> 영업 추천</a>
     <a href="#dashboard" data-page="dashboard"><span class="nav-icon">◴</span> 수집 요약</a>
@@ -74,8 +75,26 @@
   <div class="recommend-controls"><label>영업 업종<select id="profile"><option value="automation">자동제어·스마트빌딩</option><option value="electrical">전기·통신·소방</option><option value="hvac">조명·공조·HVAC</option><option value="materials">건축자재·설비</option></select></label><button class="button primary" id="recommendBtn">추천 현장 분석</button></div></div>
   <div id="recommendResults" class="project-list"></div>
 </section>
+<section id="awards" class="page">
+ <div class="workspace-intro"><div><span class="eyebrow">AWARDS &amp; CONTRACTORS</span><h2>누가 맡았는지, 근거와 함께 확인하세요.</h2><p>공공 최종낙찰과 착공 시공사 확인 자료를 구분해 비교합니다.</p></div></div>
+ <details class="data-status"><summary>낙찰 자동 수집·시공사 확보 범위</summary><p id="awardStatus" style="white-space:pre-line" aria-live="polite">수집 상태 확인 중…</p></details>
+ <form id="awardForm" class="award-form panel">
+  <label>공사명·업체·공고번호<input id="awardQ" placeholder="공사명 또는 낙찰업체 검색"></label>
+  <label>확인 구분<select id="awardKind"><option value="">전체</option><option value="public_award">공공 최종낙찰</option><option value="construction_contractor">착공 시공사 확인 (공공·민간 미구분)</option></select></label>
+  <label>연결된 현장·공고 지역<select id="awardRegion"><option value="">전체 지역</option></select></label>
+  <label>최소 낙찰금액<select id="awardAmount"><option value="">금액 전체 · 미확인 포함</option><option value="100000000">1억원 이상</option><option value="1000000000">10억원 이상</option><option value="10000000000">100억원 이상</option></select></label>
+  <label>낙찰일·착공일 시작<input type="date" id="awardFrom"></label><label>종료<input type="date" id="awardTo"></label>
+  <label>정렬<select id="awardSort"><option value="recent">낙찰일·착공일 최신 순</option><option value="amount">낙찰금액 큰 순</option></select></label>
+  <div class="award-form-actions"><button class="button primary" type="submit">검색</button><button class="button light" type="button" id="awardReset">초기화</button></div>
+ </form>
+ <div class="results-toolbar"><div><h3>수주·낙찰 목록</h3><p id="awardCount" aria-live="polite">조회 대기</p></div><button class="button light" id="awardExport" type="button" disabled>↓ 현재 페이지 CSV</button></div>
+ <p class="workspace-footnote">최소 낙찰금액을 적용하면 금액 미확인 자료는 제외됩니다. 지역 미확인 자료는 전체 지역에서 확인할 수 있습니다.</p>
+ <div id="awardResults" class="workspace-results" aria-busy="false"></div>
+ <div class="pagination"><button class="button light" id="awardPrev" disabled>← 이전</button><span id="awardPage">1 / 1</span><button class="button light" id="awardNext" disabled>다음 →</button></div>
+ <p id="awardNote" class="workspace-footnote">공공 최종낙찰과 착공 시공사 확인은 계약 확정 자료와 구분합니다.</p>
+</section>
 <section id="favorites" class="page"><div class="section-head"><div><h3>관심 현장</h3><p>영업 후보로 저장한 현장</p></div></div><div id="favoriteResults" class="project-list"></div></section>
 </main>
 <div id="modal" class="modal hidden"><div class="modal-card"><button class="close" id="closeModal">×</button><div id="modalBody"></div></div></div>
-<script src="/project-workspace.js"></script><script src="/app.js"></script><script src="/national-coverage.js"></script><script src="/national-review.js"></script>
+<script src="/project-workspace.js"></script><script src="/awards.js"></script><script src="/app.js"></script><script src="/national-coverage.js"></script><script src="/national-review.js"></script>
 </body></html>

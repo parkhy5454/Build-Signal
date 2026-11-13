@@ -24,6 +24,9 @@ jobs:
         run: |
           node --check public/app.js
           node --check public/project-workspace.js
+          node --check public/awards.js
+          node --check src/awards.js
+          node --check src/award-routes.js
           node --check public/national-coverage.js
           node --check public/national-review.js
       - name: Check admin inline script
