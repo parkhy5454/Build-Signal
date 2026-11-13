@@ -9,6 +9,7 @@ const bcrypt = require("bcryptjs");
 const { query, initDb, transaction } = require("./db");
 const { normalizeEvidence,insertEvidence,createEarlyCollector } = require("./early-projects");
 const { createDirectorySync,directoryMatches,coverageSummary,SOURCES:directorySources } = require("./organization-directory");
+const {opportunityOptions,opportunityOrder}=require("./project-search-options");
 const { profiles, scoreProject } = require("./scoring");
 const {recordAudit,auditView,summarize:summarizeArchhubProbe}=require("./archhub-audit");
 const { permitDate, permitLifecycle } = require("./archhub");
@@ -969,6 +970,7 @@ app.get("/api/projects", async (req, res) => {
   try {
     const { q = "", region = "", stage = "", type = "", contact = "", dateField = "event", from = "", to = "", page = "1", limit = "30" } = req.query;
     const p = Math.max(1, Number(page) || 1), l = Math.min(100, Math.max(1, Number(limit) || 30));
+    let opportunity;try{opportunity=opportunityOptions(req.query);}catch(e){return res.status(400).json({error:e.message});}
     const params = [], where = [];
     function add(v, sql) { where.push(sql.replace(/\?/g, () => { params.push(v); return `$${params.length}`; })); }
     const rawKeyword = String(q).trim().slice(0,120);
@@ -982,6 +984,8 @@ app.get("/api/projects", async (req, res) => {
     if (type) add(`%${String(type).slice(0,80)}%`, "p.building_type ILIKE ?");
     if (contact === 'any') where.push("(EXISTS (SELECT 1 FROM project_contacts pc WHERE pc.project_id=p.id) OR EXISTS(SELECT 1 FROM project_party_evidence pe WHERE pe.project_id=p.id))");
     if (['client','designer','supervisor','contractor','owner','developer','applicant','operator'].includes(contact)) add(contact, "(EXISTS (SELECT 1 FROM project_contacts pc WHERE pc.project_id=p.id AND pc.role=?) OR EXISTS(SELECT 1 FROM project_party_evidence pe WHERE pe.project_id=p.id AND pe.role=?))");
+    if(opportunity.minArea!==null){params.push(opportunity.minArea);where.push(opportunity.includeUnknownArea?`(p.area_sqm >= $${params.length} OR p.area_sqm IS NULL OR p.area_sqm<=0)`:`p.area_sqm >= $${params.length}`);}
+    if(opportunity.phase==='early')where.push("p.stage IN ('REVIEW','PERMIT')");
     const dateColumn = dateField === "collected" ? "p.created_at::date" : "CASE WHEN p.stage = 'PERMIT' THEN p.permit_date WHEN p.stage = 'STARTED' THEN p.start_date WHEN p.stage = 'BID' THEN p.source_updated_at WHEN p.stage = 'COMPLETED' THEN p.completion_date ELSE COALESCE(p.permit_date,p.start_date,p.source_updated_at) END";
     for (const [value,op] of [[from,">="],[to,"<="]]) {
       if (!value) continue;
@@ -1002,8 +1006,8 @@ app.get("/api/projects", async (req, res) => {
       EXISTS(SELECT 1 FROM project_contacts pc WHERE pc.project_id=p.id AND pc.phone IS NOT NULL AND pc.phone<>'') AS has_phone,
       EXISTS(SELECT 1 FROM project_contacts pc WHERE pc.project_id=p.id AND pc.email IS NOT NULL AND pc.email<>'') AS has_email
       FROM projects p ${clause}
-      ORDER BY CASE WHEN p.stage='REVIEW' THEN 0 ELSE 1 END, CASE WHEN $${params.length+1}::text <> '' AND p.name ILIKE $${params.length+2} THEN 0 ELSE 1 END,
-        p.updated_at DESC LIMIT $${params.length+3} OFFSET $${params.length+4}`,
+      ORDER BY ${opportunityOrder(opportunity.sort)}, CASE WHEN $${params.length+1}::text <> '' AND p.name ILIKE $${params.length+2} THEN 0 ELSE 1 END,
+        p.updated_at DESC,p.id DESC LIMIT $${params.length+3} OFFSET $${params.length+4}`,
       [...params, keyword, `${keyword}%`, l, (p-1)*l]);
     let coverage=null;
     if(!count.rows[0].n){

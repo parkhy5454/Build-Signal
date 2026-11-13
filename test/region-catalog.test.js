@@ -27,7 +27,7 @@ test('catalog installs in batches without deleting manual entries; same version 
 });
 test('both search APIs pass province aliases as bound arrays and all-region adds no region condition',async()=>{
  const s=fs.readFileSync(require.resolve('../src/server'),'utf8');const handlers={};let calls=[];
- const ctx={regionAliases,STAGES:['PERMIT','STARTED','COMPLETED','BID','UNKNOWN'],app:{get:(p,fn)=>handlers[p]=fn},query:async(sql,args)=>{calls.push({sql,args});return {rows:sql.includes('COUNT(*)::int AS n')?[{n:1}]:[]};}};
+ const ctx={...require('../src/project-search-options'),regionAliases,STAGES:['PERMIT','STARTED','COMPLETED','BID','UNKNOWN'],app:{get:(p,fn)=>handlers[p]=fn},query:async(sql,args)=>{calls.push({sql,args});return {rows:sql.includes('COUNT(*)::int AS n')?[{n:1}]:[]};}};
  vm.createContext(ctx);
  const p=s.indexOf('app.get("/api/projects",');vm.runInContext(s.slice(p,s.indexOf("app.get('/api/contacts/summary'",p)),ctx);
  const g=s.indexOf("app.get('/api/project-groups',");vm.runInContext(s.slice(g,s.indexOf("app.get('/api/project-groups/:id'",g)),ctx);

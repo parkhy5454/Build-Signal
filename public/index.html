@@ -5,21 +5,23 @@
 <title>BUILD SIGNAL | 건설현장 영업정보</title>
 <link rel="stylesheet" href="/styles.css">
 </head>
-<body>
+<body class="workspace">
 <aside class="sidebar">
-  <div class="brand"><div class="brand-mark">BS</div><div><b>BUILD SIGNAL</b><small>Construction Intelligence</small></div></div>
-  <nav>
-    <a class="active" href="#dashboard" data-page="dashboard">▦ 대시보드</a>
-    <a href="#projects" data-page="projects">⌕ 건설 프로젝트 통합 검색</a>
-    <a href="#recommend" data-page="recommend">✦ AI 영업 추천</a>
-    <a href="#favorites" data-page="favorites">☆ 관심 현장</a>
+  <a class="brand" href="#projects" data-go="projects"><span class="brand-mark">B<span>•</span></span><div><b>BUILD SIGNAL</b><small>CONSTRUCTION INTELLIGENCE</small></div></a>
+  <div class="nav-caption">SALES WORKSPACE</div>
+  <nav aria-label="주요 메뉴">
+    <a class="active" href="#projects" data-page="projects"><span class="nav-icon">▦</span> 프로젝트 DB</a>
+    <a href="#groups" data-page="groups"><span class="nav-icon">▤</span> 입찰 DB</a>
+    <a href="#favorites" data-page="favorites"><span class="nav-icon">☆</span> 관심·영업관리</a>
+    <a href="#recommend" data-page="recommend"><span class="nav-icon">↗</span> 영업 추천</a>
+    <a href="#dashboard" data-page="dashboard"><span class="nav-icon">◴</span> 수집 요약</a>
   </nav>
-  <div class="sidebar-bottom"><span class="dot"></span> MVP 데이터 연결 대기<br><small>샘플 데이터와 실제 데이터 구분</small></div>
+  <div class="sidebar-bottom"><b>근거가 있는 영업정보</b><br>확인된 정보와 미확인 항목을<br>명확하게 구분합니다.<div class="sidebar-version">BUILD SIGNAL · WORKSPACE</div></div>
 </aside>
 <main class="main">
-<header class="topbar"><div><span class="eyebrow">NATIONWIDE CONSTRUCTION LEADS</span><h1 id="pageTitle">대시보드</h1></div><div class="top-actions"><span class="pill">전국 데이터</span><a class="button light" href="/api/export.csv">엑셀 다운로드 ↓</a></div></header>
-<section class="panel" style="padding:16px;margin-bottom:16px" aria-live="polite"><strong>데이터 자동 갱신</strong><p id="autoFreshness">수집 상태 확인 중...</p><details class="national-coverage"><summary>전국 지역별 수집 범위 확인</summary><div id="nationalCoverage">현황 확인 중...</div></details></section>
-<section id="dashboard" class="page active">
+<header class="topbar"><div class="topbar-heading"><span class="eyebrow">WORKSPACE / PROJECTS</span><h1 id="pageTitle">건설 프로젝트</h1></div><div class="top-actions"><span class="pill">전국 프로젝트</span></div></header>
+<details class="data-status"><summary><span class="status-indicator"></span> 데이터 연결·수집 현황 <span class="summary-hint">출처와 지역별 확보 범위 확인</span></summary><div class="data-status-content"><p id="autoFreshness" aria-live="polite">수집 상태 확인 중...</p><details class="national-coverage"><summary>전국 지역별 수집 범위 확인</summary><div id="nationalCoverage">현황 확인 중...</div></details></div></details>
+<section id="dashboard" class="page">
   <div class="hero"><div><span class="eyebrow light-text">BUILD SIGNAL INSIGHT</span><h2>공사가 시작되기 전에,<br>영업 기회를 먼저 발견하세요.</h2><p>전국 건설현장 데이터를 바탕으로 새로운 영업 기회를 찾습니다.</p><a class="button white" href="#projects" data-go="projects">현장 검색 시작 →</a></div><div class="hero-art">⌂<span>▥</span><i>✦</i></div></div>
   <div class="stats">
     <article class="stat"><span>누적 등록 현장</span><strong id="total">-</strong><small>데이터베이스 기준</small></article>
@@ -47,19 +49,19 @@
   <div class="pagination"><button class="button light" id="groupPrev">← 이전</button><span id="groupPageInfo">1 / 1</span><button class="button light" id="groupNext">다음 →</button></div>
   <div class="notice">ⓘ 보수적인 자동 매칭으로 연결된 공고만 표시합니다. 원본 공고는 위 ‘개별 입찰공고·연락처’ 탭에서 모두 확인할 수 있습니다.</div>
 </section>
-<section id="projects" class="page">
-  <div class="panel" style="display:flex;gap:10px;margin-bottom:16px"><button class="button light" type="button" data-search-tab="groups">입찰공고 통합보기</button><button class="button primary" type="button" data-search-tab="projects">현장·초기 사업</button></div>
-  <div class="panel filters">
-    <label>기간 기준<select id="dateField"><option value="event">허가일·착공일·준공일·공고일</option><option value="collected">시스템 등록일</option></select></label><label>조회 기간<select id="searchPeriod"><option value="">전체 기간</option><option value="7">최근 7일</option><option value="30">최근 30일</option><option value="90">최근 3개월</option><option value="365">최근 1년</option><option value="custom">직접 지정</option></select></label><label id="searchFromWrap" hidden>시작일<input id="searchFrom" type="date"></label><label id="searchToWrap" hidden>종료일<input id="searchTo" type="date"></label><label>키워드<input id="q" placeholder="프로젝트명, 업체명 또는 심의·인허가·착공·준공"></label>
-    <label>지역<select id="region"><option value="">전체 지역</option><option value="서울특별시">서울</option><option value="전남광주통합특별시">전남광주통합특별시</option><option value="부산광역시">부산</option><option value="대구광역시">대구</option><option value="인천광역시">인천</option><option value="대전광역시">대전</option><option value="울산광역시">울산</option><option value="경기도">경기</option><option value="충청북도">충북</option><option value="충청남도">충남</option><option value="경상북도">경북</option><option value="경상남도">경남</option><option value="제주특별자치도">제주</option><option value="강원특별자치도">강원</option><option value="전북특별자치도">전북</option><option value="광주광역시">광주 (기존 자료)</option><option value="세종특별자치시">세종 (기존 자료)</option><option value="전라남도">전남 (기존 자료)</option></select></label>
-    <label>진행 단계<select id="stage"><option value="">전체 단계</option><option value="REVIEW">심의·환경평가</option><option value="PERMIT">인허가</option><option value="STARTED">착공</option><option value="COMPLETED">준공</option><option value="BID">입찰</option></select></label>
-    <label>건물 용도<input id="type" placeholder="예: 숙박시설"></label>
-    <label>연락처 확보<select id="contactFilter"><option value="">전체 프로젝트</option><option value="any">연락처 확보 현장</option><option value="client">발주기관</option><option value="owner">건축주</option><option value="developer">시행사</option><option value="applicant">심의 신청인</option><option value="designer">설계사</option><option value="supervisor">감리사</option><option value="contractor">시공사</option></select></label>
-    <button class="button primary" id="searchBtn">검색</button>
-  </div>
-  <div class="section-head"><div><h3>전국 현장·초기 사업</h3><p id="resultCount">검색 결과</p></div><a class="button light" href="/api/export.csv">CSV 다운로드</a></div>
-  <div id="projectResults" class="project-list"></div>
+<section id="projects" class="page active">
+  <div class="workspace-intro"><div><span class="workspace-kicker">FIND YOUR NEXT OPPORTUNITY</span><h2>다음 영업 기회, 여기서 찾으세요.</h2><p>규모와 진행 단계, 참여업체 정보를 비교해 영업할 현장을 고릅니다.</p></div><a class="text-link" href="#favorites" data-go="favorites">내 관심 현장 보기 ↗</a></div>
+  <div class="search-tabs" role="group" aria-label="검색 데이터"><button class="selected" type="button" data-search-tab="projects">현장·초기 사업</button><button type="button" data-search-tab="groups">입찰공고 통합보기</button></div>
+  <form id="projectSearchForm" class="search-workspace">
+    <div class="search-main"><label class="search-input"><span aria-hidden="true">⌕</span><span class="sr-only">프로젝트·업체·주소 검색</span><input id="q" autocomplete="off" placeholder="프로젝트명, 업체명 또는 현장 주소로 검색"></label><button class="button primary search-submit" id="searchBtn" type="submit">프로젝트 검색</button></div>
+    <div class="filter-bar"><label>지역<select id="region"><option value="">전체 지역</option><option value="서울특별시">서울</option><option value="전남광주통합특별시">전남광주통합특별시</option><option value="부산광역시">부산</option><option value="대구광역시">대구</option><option value="인천광역시">인천</option><option value="대전광역시">대전</option><option value="울산광역시">울산</option><option value="경기도">경기</option><option value="충청북도">충북</option><option value="충청남도">충남</option><option value="경상북도">경북</option><option value="경상남도">경남</option><option value="제주특별자치도">제주</option><option value="강원특별자치도">강원</option><option value="전북특별자치도">전북</option><option value="광주광역시">광주 (기존 자료)</option><option value="세종특별자치시">세종 (기존 자료)</option><option value="전라남도">전남 (기존 자료)</option></select></label><label>진행 단계<select id="stage"><option value="">전체 단계</option><option value="EARLY">심의·인허가 (착공 전)</option><option value="REVIEW">심의·환경평가</option><option value="PERMIT">인허가</option><option value="STARTED">착공</option><option value="COMPLETED">준공</option><option value="BID">입찰</option></select></label><label>건물 용도<input id="type" placeholder="예: 숙박시설, 업무시설"></label><label>최소 연면적<select id="minArea"><option value="">규모 전체</option><option value="3000">3,000㎡ 이상</option><option value="10000">10,000㎡ 이상</option><option value="30000">30,000㎡ 이상</option><option value="100000">100,000㎡ 이상</option></select></label><label>참여업체·연락처<select id="contactFilter"><option value="">확보 여부 전체</option><option value="any">업체·연락처 정보 있음</option><option value="owner">건축주 근거 있음</option><option value="developer">시행사 근거 있음</option><option value="designer">설계사 정보 있음</option><option value="contractor">시공사 정보 있음</option><option value="supervisor">감리사 정보 있음</option><option value="client">발주기관 정보 있음</option><option value="applicant">심의 신청인 근거 있음</option></select></label></div>
+    <div class="search-tools"><label class="check-label"><input type="checkbox" id="unknownArea"> 연면적 미확인도 포함</label><details class="period-filter"><summary>기간 상세 조건</summary><div class="period-fields"><label>기간 기준<select id="dateField"><option value="event">허가·착공·사용승인·공개일</option><option value="collected">시스템 등록일</option></select></label><label>조회 기간<select id="searchPeriod"><option value="">전체 기간</option><option value="7">최근 7일</option><option value="30">최근 30일</option><option value="90">최근 3개월</option><option value="365">최근 1년</option><option value="custom">직접 지정</option></select></label><label id="searchFromWrap" hidden>시작일<input id="searchFrom" type="date"></label><label id="searchToWrap" hidden>종료일<input id="searchTo" type="date"></label></div></details><button type="button" id="resetSearch" class="reset-button">↻ 조건 초기화</button></div>
+  </form>
+  <div class="quick-filter-bar"><span>빠른 필터</span><div class="quick-filters" role="group" aria-label="빠른 검색 조건"><button type="button" data-quick="large">대형 현장 <small>연면적 1만㎡+</small></button><button type="button" data-quick="early">착공 전 사업</button><button type="button" data-quick="hotel">숙박시설</button><button type="button" data-quick="office">업무시설</button><button type="button" data-quick="designer">설계사 정보 있음</button><button type="button" data-quick="recent">최근 30일 등록</button></div></div>
+  <div class="results-toolbar"><div><h3>프로젝트 목록 <span id="resultCountSummary">—</span></h3><p id="resultCount" aria-live="polite">검색 결과를 불러옵니다.</p><p id="activeFilterSummary" class="active-filter-summary"></p></div><div class="result-actions"><label class="sr-only" for="projectSort">프로젝트 정렬</label><select id="projectSort"><option value="priority">심의·인허가 우선</option><option value="area">연면적 큰 순</option><option value="recent">최근 정보 갱신 순</option></select><button type="button" class="button light" id="exportPage" disabled>↓ 현재 페이지 CSV</button></div></div>
+  <div id="projectResults" class="project-list workspace-results" aria-busy="true"></div>
   <div class="pagination"><button class="button light" id="prevPage">← 이전</button><span id="pageInfo">1 / 1</span><button class="button light" id="nextPage">다음 →</button></div>
+  <p class="workspace-footnote">규모·참여업체·날짜는 확보된 데이터만 표시합니다. 정보가 없는 현장은 ‘미확인’으로 표시하며, 공정률을 임의로 계산하지 않습니다.</p>
   <section class="panel" style="padding:16px;margin-top:24px" aria-labelledby="reviewNoticeTitle">
     <details style="margin-bottom:16px"><summary>심의 원문 프로젝트·건축주 분석 현황</summary><div id="reviewExtractionResults" aria-live="polite">분석 상태 확인 중...</div></details>
     <h3 id="reviewNoticeTitle">전국 심의 공개문서</h3><p>국회도서관 지방정책정보에 공개된 전국 심의자료를 자동 탐색합니다. 개별 현장·참여업체 정보는 원문 확인 후 추출하며, 아래 문서 목록과 구분합니다.</p>
@@ -75,5 +77,5 @@
 <section id="favorites" class="page"><div class="section-head"><div><h3>관심 현장</h3><p>영업 후보로 저장한 현장</p></div></div><div id="favoriteResults" class="project-list"></div></section>
 </main>
 <div id="modal" class="modal hidden"><div class="modal-card"><button class="close" id="closeModal">×</button><div id="modalBody"></div></div></div>
-<script src="/app.js"></script><script src="/national-coverage.js"></script><script src="/national-review.js"></script>
+<script src="/project-workspace.js"></script><script src="/app.js"></script><script src="/national-coverage.js"></script><script src="/national-review.js"></script>
 </body></html>
