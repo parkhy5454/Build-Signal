@@ -13,7 +13,7 @@ function fmt(n){return Number(n||0).toLocaleString("ko-KR");}
 function displayStage(p){return p.source==='environment_review'&&p.stage==='REVIEW'?'환경평가 공람(공개 시점)':stageLabel[p.stage]||'확인 필요';}
 function card(p,score){
  const badges=[p.party_count?`<span class="signal-tag">참여업체 근거 ${fmt(p.party_count)}건</span>`:'',p.has_phone?'<span class="signal-tag success">☎ 전화 확보</span>':'',p.has_email?'<span class="signal-tag success">✉ 이메일 확보</span>':'',p.contact_count>0?`<span class="signal-tag">${fmt(p.contact_count)}개 연락처</span>`:''].filter(Boolean).join('');
- return `<article class="project-card"><div class="project-main"><div class="project-topline"><span class="tag ${p.stage==="STARTED"?"green":""}">${esc(displayStage(p))}</span><span class="project-source">${esc(p.source==='g2b_bid'?'나라장터 실제 공고':p.source==='demo'?'데모 데이터':p.source==='arch_hub_permit'?'건축HUB 인허가':p.source==='public_review'?'지자체 심의자료':p.source==='seoul_review'?'서울시 건축위원회 의결조서':p.source==='environment_review'?'국립환경과학원 EIASS 공개자료':p.source||'')}</span></div><h4>${esc(p.name)}</h4><p>${esc(p.address||"현장 주소 확인 중")}</p><div class="meta"><span>${p.owner?'발주처':p.owner_evidence?'건축주(원문 추출)':p.applicant_evidence?'심의 신청인(원문 추출)':p.developer_evidence?'사업시행자(원문 추출)':'건축주'}: ${esc(p.owner||p.owner_evidence||p.applicant_evidence||p.developer_evidence||(p.source==='seoul_review'?'원문 미제공':'확인 중'))}</span><span>공종: ${esc(p.building_type||"미확인")}</span><span>${esc(p.region||"")}</span></div><div class="signal-tags">${p.architectural_review_result?'<span class="signal-tag">'+esc(p.architectural_review_result)+'</span>':''}${badges||'<span class="signal-tag muted-tag">연락처 확인 중</span>'}</div></div><div class="card-actions">${score!==undefined?`<span class="score">${score}점</span>`:""}<button class="button primary" onclick="detail(${Number(p.id)})">상세·연락처 보기</button></div></article>`;
+ return `<article class="project-card"><div class="project-main"><div class="project-topline"><span class="tag ${p.stage==="STARTED"?"green":""}">${esc(displayStage(p))}</span><span class="project-source">${esc(p.source==='g2b_bid'?'나라장터 실제 공고':p.source==='demo'?'데모 데이터':p.source==='arch_hub_permit'?'건축HUB 인허가':p.source==='public_review'?'지자체 심의자료':p.source==='document_review'?'공식 심의 PDF 원문':p.source==='seoul_review'?'서울시 건축위원회 의결조서':p.source==='environment_review'?'국립환경과학원 EIASS 공개자료':p.source||'')}</span></div><h4>${esc(p.name)}</h4><p>${esc(p.address||"현장 주소 확인 중")}</p><div class="meta"><span>${p.owner?'발주처':p.owner_evidence?'건축주(원문 추출)':p.applicant_evidence?'심의 신청인(원문 추출)':p.developer_evidence?'사업시행자(원문 추출)':'건축주'}: ${esc(p.owner||p.owner_evidence||p.applicant_evidence||p.developer_evidence||(p.source==='seoul_review'?'원문 미제공':'확인 중'))}</span><span>공종: ${esc(p.building_type||"미확인")}</span><span>${esc(p.region||"")}</span></div><div class="signal-tags">${p.source==='document_review'&&p.review_source_current===false?'<span class="signal-tag">과거 원문 기록 · 현재 안건 재확인 필요</span>':''}${p.architectural_review_result?'<span class="signal-tag">'+esc(p.architectural_review_result)+'</span>':''}${badges||'<span class="signal-tag muted-tag">연락처 확인 중</span>'}</div></div><div class="card-actions">${score!==undefined?`<span class="score">${score}점</span>`:""}<button class="button primary" onclick="detail(${Number(p.id)})">상세·연락처 보기</button></div></article>`;
 }
 async function api(url,opts){const r=await fetch(url,opts);const d=await r.json();if(!r.ok)throw new Error(d.error||"요청에 실패했습니다.");return d;}
 async function contactSummary(){
@@ -56,6 +56,7 @@ window.detail=async id=>{
  try{
  const p=await api("/api/projects/"+id);
  const fields=[["현장 주소",p.address],["지역",`${p.region||"-"} ${p.district||""}`],["공종·건물 용도",p.building_type],["진행 단계",displayStage(p)],["공사금액",p.estimated_cost?fmt(p.estimated_cost)+"원":"미확인"],["인허가일",p.permit_date],["착공일",p.start_date],["준공일",p.completion_date],["연면적",p.area_sqm?fmt(p.area_sqm)+"㎡":null],["정보 출처",p.source]];
+ if(p.source==='document_review')fields.push(['원문 현재 수록',p.review_source_current===false?'최신 분석 원문에서 확인되지 않음 · 과거 기록':'현재 확인된 심의 안건']);
  const contacts=p.contacts||[];
  const evidenceHtml=partyEvidenceHtml(p.partyEvidence||[]);
  const phaseHtml=phaseHistoryHtml(p.phaseProjects||[]);
@@ -157,7 +158,7 @@ async function loadAutomaticFreshness(){
   const time=v=>v?new Date(v).toLocaleString('ko-KR',{timeZone:'Asia/Seoul'}):'아직 없음';
   const parts=[d.enabled?'서버 자동 갱신 활성':'서버 자동 갱신 중지'];
   for(const row of d.sources){
-   const label=row.source==='bids'?'나라장터 입찰':row.source==='early'?'건축심의 공개자료':row.source==='environment_review'?'전국 환경평가 공람':row.source==='seoul_review'?'서울 건축위원회 의결조서':row.source==='national_review'?'전국 심의 공개문서 색인':'국토부 인허가·착공·준공';
+   const label=row.source==='bids'?'나라장터 입찰':row.source==='early'?'건축심의 공개자료':row.source==='environment_review'?'전국 환경평가 공람':row.source==='seoul_review'?'서울 건축위원회 의결조서':row.source==='national_review'?'전국 심의 공개문서 색인':row.source==='review_extract'?'심의 원문 프로젝트·건축주 분석':'국토부 인허가·착공·준공';
    const running=row.lease_until&&new Date(row.lease_until)>new Date();
    parts.push(label+': '+(!d.configured[row.source]?'인증키 설정 필요':running?'수집 중':row.last_error?'재시도 대기':'예약 대기')+' / 마지막 처리 성공 '+time(row.last_success_at));
   }
@@ -198,5 +199,5 @@ function environmentReviewHtml(rows){
 
 function architecturalReviewHtml(rows){
  if(!rows.length)return '';
- return '<section><h3>건축위원회 심의의결 기록</h3><p>심의 결과는 건축허가·착공 완료와 구분합니다. 공개 의결조서에 참여업체·담당 연락처가 없으면 임의로 채우지 않습니다.</p>'+rows.map(r=>'<p>'+esc(r.committee_name)+' · 심의일 '+esc(String(r.review_date||'미제공').slice(0,10))+'<br>의결번호 '+esc(r.decision_no)+' · 결과 '+esc(r.decision_result)+'<br><a href="'+esc(r.post_url)+'" target="_blank" rel="noopener noreferrer">서울시 공개 게시물</a></p>').join('')+'</section>';
+ return '<section><h3>건축위원회 심의의결 기록</h3><p>심의 결과는 건축허가·착공 완료와 구분합니다. 공개 의결조서에 참여업체·담당 연락처가 없으면 임의로 채우지 않습니다.</p>'+rows.map(r=>'<p>'+esc(r.committee_name)+' · 심의일 '+esc(String(r.review_date||'미제공').slice(0,10))+'<br>의결번호 '+esc(r.decision_no)+' · 결과 '+esc(r.decision_result)+'<br><a href="'+esc(r.post_url)+'" target="_blank" rel="noopener noreferrer">공식 심의 공개 게시물</a></p>').join('')+'</section>';
 }

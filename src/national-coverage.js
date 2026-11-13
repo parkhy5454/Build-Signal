@@ -16,7 +16,7 @@ function nationalCoverage({regions=provinces,stats=[],directories=[],environment
   const targets=Number(s.targets||0),attempted=Number(s.attempted||0),completed=Number(s.completed||0),fresh=Number(s.fresh||0),failed=Number(s.failed||0);
   const labels=new Set([p.value,p.label,...p.aliases]);
   const developerSources=sources.filter(x=>x.source!=='architects'&&(labels.has(x.region)||p.aliases.some(a=>a===SOURCES[x.source]?.region)));
-  const review=p.aliases.includes('서울특별시')?'서울시 건축위원회 공개목록 순차 탐색 중 · 지원 형식 PDF 일부':p.aliases.includes('울산광역시')?'울산 남구 공개 본문 일부':p.aliases.includes('전북특별자치도')?'군산 공개 PDF 1건':null;
+  const review=p.aliases.includes('서울특별시')?'서울시 건축위원회 공개목록 순차 탐색 중 · 지원 형식 PDF 일부':p.aliases.includes('인천광역시')?'인천시 최신 게시물 중 검증된 건축경관공동위원회 PDF 일부':p.aliases.includes('울산광역시')?'울산 남구 공개 본문 일부':p.aliases.includes('전북특별자치도')?'군산 공개 PDF 1건':null;
   const discoverySources=STREAMS.filter(x=>labels.has(x.region)).map(source=>({...source,sourceUrl:listUrl(source.id),...reviewStreams.find(row=>row.id===source.id)}));
   const discoveryCounts=reviewDocuments.filter(x=>labels.has(x.publisher_region));
   const discovery={status:discoverySources.some(x=>x.last_error)?'partial':discoverySources.length&&discoverySources.every(x=>x.last_success_at)?'checked':'pending',

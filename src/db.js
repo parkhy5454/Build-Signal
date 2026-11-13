@@ -38,7 +38,7 @@ async function initDb() {
       last_attempt_at TIMESTAMPTZ,last_success_at TIMESTAMPTZ,last_error TEXT,
       lease_token TEXT,lease_until TIMESTAMPTZ,call_day DATE,daily_calls INTEGER NOT NULL DEFAULT 0
     );
-    INSERT INTO auto_ingest_state(source) VALUES('permits'),('bids'),('early'),('environment_review'),('seoul_review'),('national_review') ON CONFLICT DO NOTHING;
+    INSERT INTO auto_ingest_state(source) VALUES('permits'),('bids'),('early'),('environment_review'),('seoul_review'),('national_review'),('review_extract') ON CONFLICT DO NOTHING;
     CREATE TABLE IF NOT EXISTS auto_permit_regions (
       sigungu_cd CHAR(5) NOT NULL,bjdong_cd CHAR(5) NOT NULL,label TEXT NOT NULL DEFAULT '',
       enabled BOOLEAN NOT NULL DEFAULT TRUE,next_page INTEGER NOT NULL DEFAULT 1 CHECK(next_page>0),
@@ -160,6 +160,22 @@ async function initDb() {
       doc_id TEXT NOT NULL REFERENCES national_review_notices(doc_id) ON DELETE CASCADE,region TEXT NOT NULL,PRIMARY KEY(doc_id,region)
     );
     CREATE INDEX IF NOT EXISTS idx_national_review_due ON national_review_notices(next_due_at);
+    CREATE TABLE IF NOT EXISTS review_extract_state(id INTEGER PRIMARY KEY,next_discovery_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
+    INSERT INTO review_extract_state(id) VALUES(1) ON CONFLICT DO NOTHING;
+    CREATE TABLE IF NOT EXISTS review_extract_pages (
+      url TEXT PRIMARY KEY,title TEXT NOT NULL,next_due_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),last_checked_at TIMESTAMPTZ,last_error TEXT
+    );
+    CREATE TABLE IF NOT EXISTS review_extract_files (
+      url TEXT PRIMARY KEY,page_url TEXT NOT NULL REFERENCES review_extract_pages(url),name TEXT NOT NULL,format TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',content_hash TEXT,parser_version TEXT,record_count INTEGER NOT NULL DEFAULT 0,
+      next_due_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),last_checked_at TIMESTAMPTZ,last_error TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_review_extract_pages ON review_extract_files(page_url);
+    CREATE TABLE IF NOT EXISTS review_extracted_projects (
+      file_url TEXT NOT NULL REFERENCES review_extract_files(url),project_id BIGINT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,case_key TEXT NOT NULL,is_current BOOLEAN NOT NULL DEFAULT TRUE,
+      PRIMARY KEY(file_url,case_key)
+    );
+    ALTER TABLE review_extracted_projects ADD COLUMN IF NOT EXISTS is_current BOOLEAN NOT NULL DEFAULT TRUE;
     CREATE TABLE IF NOT EXISTS project_party_evidence (
       id BIGSERIAL PRIMARY KEY,project_id BIGINT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
       role TEXT NOT NULL CHECK(role IN ('owner','developer','applicant','designer','contractor','supervisor','operator')),
