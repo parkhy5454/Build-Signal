@@ -60,6 +60,11 @@
   <div class="section-head"><div><h3>전국 현장·초기 사업</h3><p id="resultCount">검색 결과</p></div><a class="button light" href="/api/export.csv">CSV 다운로드</a></div>
   <div id="projectResults" class="project-list"></div>
   <div class="pagination"><button class="button light" id="prevPage">← 이전</button><span id="pageInfo">1 / 1</span><button class="button light" id="nextPage">다음 →</button></div>
+  <section class="panel" style="padding:16px;margin-top:24px" aria-labelledby="reviewNoticeTitle">
+    <h3 id="reviewNoticeTitle">전국 심의 공개문서</h3><p>국회도서관 지방정책정보에 공개된 전국 심의자료를 자동 탐색합니다. 개별 현장·참여업체 정보는 원문 확인 후 추출하며, 아래 문서 목록과 구분합니다.</p>
+    <form id="reviewNoticeForm" class="filters"><label>발행기관 지역<select id="reviewNoticeRegion"><option value="">전체 지역</option></select></label><label>문서·발행기관 검색<input id="reviewNoticeKeyword" maxlength="100" placeholder="예: 건축위원회, 숙박시설"></label><button type="submit" class="button primary">공개문서 검색</button></form>
+    <p id="reviewNoticeSummary" aria-live="polite">불러오는 중...</p><div id="reviewNoticeResults" class="project-list"></div><div class="pagination"><button type="button" class="button light" id="reviewNoticePrev" disabled>← 이전</button><button type="button" class="button light" id="reviewNoticeNext" disabled>다음 →</button></div>
+  </section>
 </section>
 <section id="recommend" class="page">
   <div class="panel"><h3>우리 제품에 맞는 영업현장 찾기</h3><p class="muted">영업 업종을 선택하면 건물 용도·규모·공정 단계에 따라 우선순위를 계산합니다.</p>
@@ -69,5 +74,5 @@
 <section id="favorites" class="page"><div class="section-head"><div><h3>관심 현장</h3><p>영업 후보로 저장한 현장</p></div></div><div id="favoriteResults" class="project-list"></div></section>
 </main>
 <div id="modal" class="modal hidden"><div class="modal-card"><button class="close" id="closeModal">×</button><div id="modalBody"></div></div></div>
-<script src="/app.js"></script><script src="/national-coverage.js"></script>
+<script src="/app.js"></script><script src="/national-coverage.js"></script><script src="/national-review.js"></script>
 </body></html>

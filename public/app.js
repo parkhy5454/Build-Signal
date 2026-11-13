@@ -157,7 +157,7 @@ async function loadAutomaticFreshness(){
   const time=v=>v?new Date(v).toLocaleString('ko-KR',{timeZone:'Asia/Seoul'}):'아직 없음';
   const parts=[d.enabled?'서버 자동 갱신 활성':'서버 자동 갱신 중지'];
   for(const row of d.sources){
-   const label=row.source==='bids'?'나라장터 입찰':row.source==='early'?'건축심의 공개자료':row.source==='environment_review'?'전국 환경평가 공람':row.source==='seoul_review'?'서울 건축위원회 의결조서':'국토부 인허가·착공·준공';
+   const label=row.source==='bids'?'나라장터 입찰':row.source==='early'?'건축심의 공개자료':row.source==='environment_review'?'전국 환경평가 공람':row.source==='seoul_review'?'서울 건축위원회 의결조서':row.source==='national_review'?'전국 심의 공개문서 색인':'국토부 인허가·착공·준공';
    const running=row.lease_until&&new Date(row.lease_until)>new Date();
    parts.push(label+': '+(!d.configured[row.source]?'인증키 설정 필요':running?'수집 중':row.last_error?'재시도 대기':'예약 대기')+' / 마지막 처리 성공 '+time(row.last_success_at));
   }

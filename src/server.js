@@ -14,6 +14,7 @@ const { permitDate, permitLifecycle } = require("./archhub");
 const { createAutoIngest } = require("./auto-ingest");
 const {REGION_STATS_SQL,nationalCoverage}=require("./national-coverage");
 const {createEnvironmentCollector}=require("./environment-review");
+const {createNationalReviewCollector,STREAMS:reviewStreams}=require("./national-review");
 const {createSeoulCollector}=require("./seoul-review");
 const { meta:regionCatalogMeta,provinces,regionAliases,installRegionCatalog } = require("./region-catalog");
 
@@ -1847,6 +1848,7 @@ const earlyCollector=createEarlyCollector({query,transaction});
 const directorySync=createDirectorySync({query,transaction});
 const environmentCollector=createEnvironmentCollector({query,transaction});
 const seoulCollector=createSeoulCollector({query,transaction});
+const nationalReviewCollector=createNationalReviewCollector({query,transaction});
 const automaticIngest=createAutoIngest({query,
  busy:source=>source==='bids'?g2bJob?.status==='running':permitJob?.status==='running',
  permit:async opts=>{
@@ -1865,17 +1867,35 @@ app.get('/api/ingestion/coverage',async(req,res)=>{
  try{
   if(!nationalCoverageCache||nationalCoverageCache.expiresAt<Date.now()){
    if(!nationalCoverageLoading)nationalCoverageLoading=(async()=>{
-    const [stats,directories,environment]=await Promise.all([
+    const [stats,directories,environment,reviewStates,reviewDocuments]=await Promise.all([
      query(REGION_STATS_SQL),query('SELECT source,last_success_at,last_error,record_count FROM directory_sync_state'),
-     query("SELECT s.last_success_at,s.last_error,COUNT(p.id)::int AS total,COUNT(p.id) FILTER (WHERE p.region IS NULL)::int AS unlocated FROM auto_ingest_state s LEFT JOIN projects p ON p.source=s.source WHERE s.source='environment_review' GROUP BY s.source,s.last_success_at,s.last_error")
+     query("SELECT s.last_success_at,s.last_error,COUNT(p.id)::int AS total,COUNT(p.id) FILTER (WHERE p.region IS NULL)::int AS unlocated FROM auto_ingest_state s LEFT JOIN projects p ON p.source=s.source WHERE s.source='environment_review' GROUP BY s.source,s.last_success_at,s.last_error"),
+     query('SELECT id,last_attempt_at,last_success_at,last_error,index_count,archive_page,last_cycle_at FROM national_review_streams'),
+     query("SELECT nr.region AS publisher_region,COUNT(*)::int documents,COUNT(*) FILTER(WHERE n.status='checked')::int checked,COUNT(*) FILTER(WHERE n.status='error')::int failed FROM national_review_notices n LEFT JOIN national_review_notice_regions nr ON nr.doc_id=n.doc_id GROUP BY nr.region")
     ]);
-    const data=nationalCoverage({stats:stats.rows,directories:directories.rows,environment:environment.rows[0],configured:!!process.env.ARCH_HUB_SERVICE_KEY,enabled:automaticIngest.enabled(),env:process.env});
+    const data=nationalCoverage({stats:stats.rows,directories:directories.rows,environment:environment.rows[0],reviewStreams:reviewStates.rows,reviewDocuments:reviewDocuments.rows,configured:!!process.env.ARCH_HUB_SERVICE_KEY,enabled:automaticIngest.enabled(),env:process.env});
     nationalCoverageCache={data,expiresAt:Date.now()+60000};
    })().finally(()=>{nationalCoverageLoading=null;});
    await nationalCoverageLoading;
   }
   res.json(nationalCoverageCache.data);
  }catch{res.status(500).json({error:'전국 지역별 수집 현황 조회 실패'});}
+});
+app.get('/api/review-notices',async(req,res)=>{
+ try{
+  const page=Math.max(1,Math.min(10000,parseInt(req.query.page,10)||1)),region=String(req.query.region||'').trim(),keyword=String(req.query.q||'').trim().slice(0,100);
+  const aliases=regionAliases(region),args=[aliases,keyword],where="($1::text[]='{}'::text[] OR EXISTS(SELECT 1 FROM national_review_notice_regions nr WHERE nr.doc_id=national_review_notices.doc_id AND nr.region=ANY($1::text[]))) AND ($2::text='' OR title ILIKE '%'||$2||'%' OR publisher ILIKE '%'||$2||'%')";
+  const count=await query('SELECT COUNT(*)::int n FROM national_review_notices WHERE '+where,args);
+  const rows=await query(`SELECT doc_id,title,publisher,(SELECT string_agg(region,', ' ORDER BY region) FROM national_review_notice_regions nr WHERE nr.doc_id=national_review_notices.doc_id) AS publisher_region,published_date,index_url,CASE WHEN status='checked' THEN original_url ELSE NULL END AS original_url,status,last_checked_at FROM national_review_notices WHERE ${where} ORDER BY published_date DESC,doc_id LIMIT 20 OFFSET $3`,[...args,(page-1)*20]);
+  res.json({rows:rows.rows,total:count.rows[0].n,page,pageSize:20,note:'전국 지방정책정보 색인에 공개된 심의 문서입니다. 발행기관 지역은 현장 위치와 다르며, 문서 수는 프로젝트·참여업체 확보 건수가 아닙니다.'});
+ }catch{res.status(500).json({error:'전국 심의 공개문서 조회 실패'});}
+});
+app.get('/api/review-notices/coverage',async(req,res)=>{
+ try{
+  const states=await query('SELECT id,region,index_count,archive_page,last_attempt_at,last_success_at,last_cycle_at,last_error FROM national_review_streams ORDER BY id');
+  const counts=await query("SELECT nr.region AS publisher_region,COUNT(*)::int documents,COUNT(*) FILTER(WHERE n.status='checked')::int checked,COUNT(*) FILTER(WHERE n.status='error')::int failed FROM national_review_notices n LEFT JOIN national_review_notice_regions nr ON nr.doc_id=n.doc_id GROUP BY nr.region");
+  res.json({streams:reviewStreams.map(s=>({...s,...states.rows.find(r=>r.id===s.id)})),counts:counts.rows,note:'전국 공개 색인 연결 상태입니다. 조회 성공이나 검색 결과 0건은 관할 전체 심의·현장·연락처 확보를 의미하지 않습니다.'});
+ }catch{res.status(500).json({error:'전국 심의 연결 상태 조회 실패'});}
 });
 app.get('/api/ingestion/freshness',async(req,res)=>{
  try{
@@ -1891,7 +1911,7 @@ app.get('/api/ingestion/freshness',async(req,res)=>{
    (SELECT COUNT(*)::int FROM seoul_review_files WHERE status='processed') AS processed_files,
    (SELECT COUNT(*)::int FROM seoul_review_files WHERE status='error') AS failed_files
    FROM seoul_review_state s WHERE id=1`);
-  res.json({enabled:automaticIngest.enabled(),configured:{permits:!!process.env.ARCH_HUB_SERVICE_KEY,bids:!!process.env.G2B_SERVICE_KEY,early:true,environment_review:true,seoul_review:true},sources:states.rows,coverage:coverage.rows[0],seoulReview:seoulReview.rows[0],catalogDate:regionCatalogMeta.retrievedOn,
+  res.json({enabled:automaticIngest.enabled(),configured:{permits:!!process.env.ARCH_HUB_SERVICE_KEY,bids:!!process.env.G2B_SERVICE_KEY,early:true,environment_review:true,seoul_review:true,national_review:true},sources:states.rows,coverage:coverage.rows[0],seoulReview:seoulReview.rows[0],catalogDate:regionCatalogMeta.retrievedOn,
    note:'국토부는 내장된 전국 공식 지역코드로 순회 적재합니다. 지역 선택은 저장된 자료를 필터링하며, 지역별 수집 완료를 의미하지 않습니다. 처리량과 원천 반영 주기에 따라 지연될 수 있습니다.'});
  }catch{res.status(500).json({error:'자동 수집 현황 조회 실패'});}
 });
@@ -1906,6 +1926,6 @@ async function start() {
       ON CONFLICT(email) DO UPDATE SET password_hash=EXCLUDED.password_hash,role='admin',status='approved'`,[email,hash]);
   }
   const port = process.env.PORT || 10000;
-  app.listen(port, () => {console.log(`BUILD SIGNAL listening on ${port}`);automaticIngest.start();earlyCollector.start();directorySync.start();environmentCollector.start();seoulCollector.start();});
+  app.listen(port, () => {console.log(`BUILD SIGNAL listening on ${port}`);automaticIngest.start();earlyCollector.start();directorySync.start();environmentCollector.start();seoulCollector.start();nationalReviewCollector.start();});
 }
 start().catch(e => { console.error("Startup failed:", e); process.exit(1); });
