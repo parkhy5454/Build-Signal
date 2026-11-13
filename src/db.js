@@ -38,7 +38,19 @@ async function initDb() {
       last_attempt_at TIMESTAMPTZ,last_success_at TIMESTAMPTZ,last_error TEXT,
       lease_token TEXT,lease_until TIMESTAMPTZ,call_day DATE,daily_calls INTEGER NOT NULL DEFAULT 0
     );
-    INSERT INTO auto_ingest_state(source) VALUES('permits'),('bids'),('early'),('environment_review'),('seoul_review'),('national_review'),('review_extract') ON CONFLICT DO NOTHING;
+    INSERT INTO auto_ingest_state(source) VALUES('permits'),('bids'),('awards'),('early'),('environment_review'),('seoul_review'),('national_review'),('review_extract') ON CONFLICT DO NOTHING;
+    CREATE TABLE IF NOT EXISTS construction_awards (
+      id BIGSERIAL PRIMARY KEY,event_key TEXT NOT NULL UNIQUE,notice_no TEXT NOT NULL,notice_ord TEXT NOT NULL,
+      classification_no TEXT NOT NULL,rebid_no TEXT NOT NULL,name TEXT NOT NULL,winner TEXT NOT NULL,business_no TEXT,
+      company_phone TEXT,company_person TEXT,company_address TEXT,owner TEXT,award_amount NUMERIC,award_date DATE,
+      source_url TEXT NOT NULL,first_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_awards_notice ON construction_awards(notice_no,notice_ord);
+    CREATE INDEX IF NOT EXISTS idx_awards_date ON construction_awards(award_date DESC);
+    CREATE TABLE IF NOT EXISTS award_scan (
+      id INTEGER PRIMARY KEY CHECK(id=1),window_from TIMESTAMPTZ NOT NULL,window_to TIMESTAMPTZ NOT NULL,
+      next_page INTEGER NOT NULL DEFAULT 1 CHECK(next_page>0),total_count INTEGER,seen_keys JSONB NOT NULL DEFAULT '[]'::jsonb
+    );
     CREATE TABLE IF NOT EXISTS archhub_api_audit (
       operation TEXT PRIMARY KEY,last_response_at TIMESTAMPTZ NOT NULL,last_nonempty_at TIMESTAMPTZ,
       last_received_count INTEGER NOT NULL,last_total_count BIGINT,sample_size INTEGER NOT NULL,valid_identity INTEGER NOT NULL,
