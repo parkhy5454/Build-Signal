@@ -24,6 +24,7 @@ jobs:
         run: |
           node --check public/app.js
           node --check public/national-coverage.js
+          node --check public/national-review.js
       - name: Check admin inline script
         run: |
           node - <<'NODE'

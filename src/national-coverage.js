@@ -1,4 +1,5 @@
 const {provinces,meta}=require('./region-catalog');
+const {STREAMS,listUrl}=require('./national-review');
 const {SOURCES,coverageSummary}=require('./organization-directory');
 const REGION_STATS_SQL=`SELECT LEFT(sigungu_cd,2) AS province,
  COUNT(*)::int AS targets,COUNT(last_attempt_at)::int AS attempted,
@@ -8,7 +9,7 @@ const REGION_STATS_SQL=`SELECT LEFT(sigungu_cd,2) AS province,
  MAX(last_attempt_at) AS last_attempt_at,MIN(last_cycle_at) AS oldest_cycle
  FROM auto_permit_regions WHERE enabled=TRUE GROUP BY LEFT(sigungu_cd,2)`;
 function dailyBudget(env){const n=Number(env.AUTO_PERMIT_DAILY_REQUESTS);return Number.isInteger(n)&&n>0?Math.min(n,10000):500;}
-function nationalCoverage({regions=provinces,stats=[],directories=[],environment=null,configured=false,enabled=true,env={}}={}){
+function nationalCoverage({regions=provinces,stats=[],directories=[],environment=null,reviewStreams=[],reviewDocuments=[],configured=false,enabled=true,env={}}={}){
  const sources=coverageSummary(directories),active=regions.filter(p=>p.code);
  const rows=active.map(p=>{
   const s=stats.find(x=>String(x.province)===p.code)||{};
@@ -16,10 +17,14 @@ function nationalCoverage({regions=provinces,stats=[],directories=[],environment
   const labels=new Set([p.value,p.label,...p.aliases]);
   const developerSources=sources.filter(x=>x.source!=='architects'&&(labels.has(x.region)||p.aliases.some(a=>a===SOURCES[x.source]?.region)));
   const review=p.aliases.includes('서울특별시')?'서울시 건축위원회 공개목록 순차 탐색 중 · 지원 형식 PDF 일부':p.aliases.includes('울산광역시')?'울산 남구 공개 본문 일부':p.aliases.includes('전북특별자치도')?'군산 공개 PDF 1건':null;
+  const discoverySources=STREAMS.filter(x=>labels.has(x.region)).map(source=>({...source,sourceUrl:listUrl(source.id),...reviewStreams.find(row=>row.id===source.id)}));
+  const discoveryCounts=reviewDocuments.filter(x=>labels.has(x.publisher_region));
+  const discovery={status:discoverySources.some(x=>x.last_error)?'partial':discoverySources.length&&discoverySources.every(x=>x.last_success_at)?'checked':'pending',
+   documents:discoveryCounts.reduce((n,x)=>n+Number(x.documents||0),0),checked:discoveryCounts.reduce((n,x)=>n+Number(x.checked||0),0),failed:discoveryCounts.reduce((n,x)=>n+Number(x.failed||0),0),sources:discoverySources};
   return {code:p.code,name:p.value,label:p.label,permits:{targets,attempted,completed,fresh,failed,lastAttemptAt:s.last_attempt_at||null,oldestCycle:s.oldest_cycle||null,
    status:!configured?'key_missing':!targets?'queue_pending':!attempted?'pending':completed<targets?'initial_loading':fresh<targets?'refresh_pending':'cycle_current'},
    developers:{status:!developerSources.length?'unconnected':developerSources.every(x=>x.status==='synced')?'synced':developerSources.some(x=>x.status!=='pending')?'retained':'pending',sources:developerSources},
-   review:{status:review?'partial':'unconnected',scope:review}};
+   review:{status:review?'partial':'unconnected',scope:review,discovery}};
  });
  const queueKnown=rows.length>0&&rows.every(r=>r.permits.targets>0);
  const remaining=rows.reduce((n,r)=>n+r.permits.targets-r.permits.completed,0),budget=dailyBudget(env);

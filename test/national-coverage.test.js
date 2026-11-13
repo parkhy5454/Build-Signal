@@ -35,3 +35,7 @@ test('national environment source success cannot turn unconnected architectural 
  assert.equal(data.environmentalReview.status,'checked');assert.equal(data.environmentalReview.total,14);assert.equal(data.environmentalReview.unlocated,7);
  assert.equal(data.rows.find(r=>r.code==='11').review.status,'partial');assert(data.environmentalReview.scope.includes('건축위원회 심의 전체를 대체하지 않습니다'));
 });
+test('national index query success and zero hits cannot claim project or contact extraction completion',()=>{
+ const {STREAMS}=require('../src/national-review');const d=nationalCoverage({reviewStreams:STREAMS.map(s=>({id:s.id,last_success_at:'2026-11-13',index_count:0})),reviewDocuments:[]});
+ const row=d.rows.find(x=>x.name==='경상남도');assert.equal(row.review.discovery.status,'checked');assert.equal(row.review.discovery.documents,0);assert.equal(row.review.status,'unconnected');assert.equal(row.developers.status,'unconnected');
+});

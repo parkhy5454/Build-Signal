@@ -38,7 +38,7 @@ async function initDb() {
       last_attempt_at TIMESTAMPTZ,last_success_at TIMESTAMPTZ,last_error TEXT,
       lease_token TEXT,lease_until TIMESTAMPTZ,call_day DATE,daily_calls INTEGER NOT NULL DEFAULT 0
     );
-    INSERT INTO auto_ingest_state(source) VALUES('permits'),('bids'),('early'),('environment_review'),('seoul_review') ON CONFLICT DO NOTHING;
+    INSERT INTO auto_ingest_state(source) VALUES('permits'),('bids'),('early'),('environment_review'),('seoul_review'),('national_review') ON CONFLICT DO NOTHING;
     CREATE TABLE IF NOT EXISTS auto_permit_regions (
       sigungu_cd CHAR(5) NOT NULL,bjdong_cd CHAR(5) NOT NULL,label TEXT NOT NULL DEFAULT '',
       enabled BOOLEAN NOT NULL DEFAULT TRUE,next_page INTEGER NOT NULL DEFAULT 1 CHECK(next_page>0),
@@ -146,6 +146,20 @@ async function initDb() {
       post_id BIGINT PRIMARY KEY,status TEXT NOT NULL DEFAULT 'pending',supported_files INTEGER,
       next_due_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),last_checked_at TIMESTAMPTZ,last_error TEXT
     );
+    CREATE TABLE IF NOT EXISTS national_review_streams (
+      id TEXT PRIMARY KEY,region TEXT NOT NULL,index_count INTEGER,archive_page INTEGER NOT NULL DEFAULT 2,
+      next_latest_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),next_archive_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      retry_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),last_attempt_at TIMESTAMPTZ,last_success_at TIMESTAMPTZ,last_cycle_at TIMESTAMPTZ,last_error TEXT
+    );
+    CREATE TABLE IF NOT EXISTS national_review_notices (
+      doc_id TEXT PRIMARY KEY,title TEXT NOT NULL,publisher TEXT NOT NULL,publisher_region TEXT,published_date DATE NOT NULL,
+      index_url TEXT NOT NULL,original_url TEXT,status TEXT NOT NULL DEFAULT 'pending',
+      next_due_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),last_checked_at TIMESTAMPTZ,last_error TEXT
+    );
+    CREATE TABLE IF NOT EXISTS national_review_notice_regions (
+      doc_id TEXT NOT NULL REFERENCES national_review_notices(doc_id) ON DELETE CASCADE,region TEXT NOT NULL,PRIMARY KEY(doc_id,region)
+    );
+    CREATE INDEX IF NOT EXISTS idx_national_review_due ON national_review_notices(next_due_at);
     CREATE TABLE IF NOT EXISTS project_party_evidence (
       id BIGSERIAL PRIMARY KEY,project_id BIGINT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
       role TEXT NOT NULL CHECK(role IN ('owner','developer','applicant','designer','contractor','supervisor','operator')),
