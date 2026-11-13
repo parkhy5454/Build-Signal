@@ -15,6 +15,7 @@ const { createAutoIngest } = require("./auto-ingest");
 const {REGION_STATS_SQL,nationalCoverage}=require("./national-coverage");
 const {createEnvironmentCollector}=require("./environment-review");
 const {createNationalReviewCollector,STREAMS:reviewStreams}=require("./national-review");
+const {createReviewExtractor}=require("./review-extraction");
 const {createSeoulCollector}=require("./seoul-review");
 const { meta:regionCatalogMeta,provinces,regionAliases,installRegionCatalog } = require("./region-catalog");
 
@@ -989,6 +990,7 @@ app.get("/api/projects", async (req, res) => {
     const clause = where.length ? `WHERE ${where.join(" AND ")}` : "";
     const count = await query(`SELECT COUNT(*)::int AS n FROM projects p ${clause}`, params);
     const rows = await query(`SELECT p.*,
+      (SELECT BOOL_OR(is_current) FROM review_extracted_projects rp WHERE rp.project_id=p.id) AS review_source_current,
       (SELECT decision_result FROM architectural_review_details ar WHERE ar.project_id=p.id) AS architectural_review_result,
       (SELECT organization FROM project_party_evidence pe WHERE pe.project_id=p.id AND pe.role='owner' ORDER BY observed_at DESC,id DESC LIMIT 1) AS owner_evidence,
       (SELECT organization FROM project_party_evidence pe WHERE pe.project_id=p.id AND pe.role='applicant' ORDER BY observed_at DESC,id DESC LIMIT 1) AS applicant_evidence,
@@ -1199,7 +1201,7 @@ app.post('/api/admin/party-contact-decisions',loadUser,requireAdminRole,async(re
 });
 app.get('/api/admin/early-projects',loadUser,requireAdminRole,async(req,res)=>{
  try{
-  const projects=await query(`SELECT p.id,p.name,p.address,p.source,p.source_updated_at,l.permit_id FROM projects p LEFT JOIN project_phase_links l ON l.early_id=p.id WHERE p.source IN ('public_review','environment_review','seoul_review') ORDER BY p.updated_at DESC LIMIT 50`);
+  const projects=await query(`SELECT p.id,p.name,p.address,p.source,p.source_updated_at,l.permit_id FROM projects p LEFT JOIN project_phase_links l ON l.early_id=p.id WHERE p.source IN ('public_review','environment_review','seoul_review','document_review') ORDER BY p.updated_at DESC LIMIT 50`);
   const documents=await query('SELECT * FROM early_source_documents ORDER BY last_checked_at DESC NULLS LAST LIMIT 20');
   res.json({projects:projects.rows,documents:documents.rows});
  }catch{res.status(500).json({error:'초기 사업 수집 현황 조회 실패'});}
@@ -1217,7 +1219,7 @@ app.post('/api/admin/early-projects/link',loadUser,requireAdminRole,async(req,re
   const early=Number(req.body?.early_id),permit=Number(req.body?.permit_id),reason=String(req.body?.reason||'').trim();
   if(!Number.isSafeInteger(early)||!Number.isSafeInteger(permit)||early<1||permit<1||early===permit||reason.length<10||reason.length>1000)return res.status(400).json({error:'심의/인허가 현장 ID와 같은 사업으로 판단한 근거(10~1000자)가 필요합니다.'});
   const linked=await query(`INSERT INTO project_phase_links(early_id,permit_id,reason,reviewed_by)
-   SELECT a.id,b.id,$3,$4 FROM projects a,projects b WHERE a.id=$1 AND (a.source='public_review' OR a.source='environment_review' OR a.source='seoul_review') AND b.id=$2 AND b.source='arch_hub_permit'
+   SELECT a.id,b.id,$3,$4 FROM projects a,projects b WHERE a.id=$1 AND (a.source='public_review' OR a.source='environment_review' OR a.source='seoul_review' OR a.source='document_review') AND b.id=$2 AND b.source='arch_hub_permit'
    ON CONFLICT(early_id) DO NOTHING RETURNING early_id`,[early,permit,reason,req.user.id]);
   if(!linked.rowCount)return res.status(409).json({error:'출처 유형이 다르거나 이미 연결되었습니다. 원문과 기존 연결을 확인하세요.'});
   res.json({ok:true});
@@ -1225,7 +1227,7 @@ app.post('/api/admin/early-projects/link',loadUser,requireAdminRole,async(req,re
 });
 app.get("/api/projects/:id", async (req, res) => {
   try {
-    const r = await query("SELECT * FROM projects WHERE id=$1", [req.params.id]);
+    const r = await query("SELECT p.*,(SELECT BOOL_OR(is_current) FROM review_extracted_projects rp WHERE rp.project_id=p.id) AS review_source_current FROM projects p WHERE p.id=$1", [req.params.id]);
     if (!r.rowCount) return res.status(404).json({ error: "현장을 찾을 수 없습니다." });
     const f = await query("SELECT id FROM favorites WHERE project_id=$1 AND user_key=$2", [req.params.id, String(req.user.id)]);
     const s = await query("SELECT status,note FROM sales_pipeline WHERE project_id=$1 AND user_key=$2", [req.params.id, String(req.user.id)]);
@@ -1848,6 +1850,7 @@ const earlyCollector=createEarlyCollector({query,transaction});
 const directorySync=createDirectorySync({query,transaction});
 const environmentCollector=createEnvironmentCollector({query,transaction});
 const seoulCollector=createSeoulCollector({query,transaction});
+const reviewExtractor=createReviewExtractor({query,transaction});
 const nationalReviewCollector=createNationalReviewCollector({query,transaction});
 const automaticIngest=createAutoIngest({query,
  busy:source=>source==='bids'?g2bJob?.status==='running':permitJob?.status==='running',
@@ -1886,7 +1889,9 @@ app.get('/api/review-notices',async(req,res)=>{
   const page=Math.max(1,Math.min(10000,parseInt(req.query.page,10)||1)),region=String(req.query.region||'').trim(),keyword=String(req.query.q||'').trim().slice(0,100);
   const aliases=regionAliases(region),args=[aliases,keyword],where="($1::text[]='{}'::text[] OR EXISTS(SELECT 1 FROM national_review_notice_regions nr WHERE nr.doc_id=national_review_notices.doc_id AND nr.region=ANY($1::text[]))) AND ($2::text='' OR title ILIKE '%'||$2||'%' OR publisher ILIKE '%'||$2||'%')";
   const count=await query('SELECT COUNT(*)::int n FROM national_review_notices WHERE '+where,args);
-  const rows=await query(`SELECT doc_id,title,publisher,(SELECT string_agg(region,', ' ORDER BY region) FROM national_review_notice_regions nr WHERE nr.doc_id=national_review_notices.doc_id) AS publisher_region,published_date,index_url,CASE WHEN status='checked' THEN original_url ELSE NULL END AS original_url,status,last_checked_at FROM national_review_notices WHERE ${where} ORDER BY published_date DESC,doc_id LIMIT 20 OFFSET $3`,[...args,(page-1)*20]);
+  const rows=await query(`SELECT doc_id,title,publisher,(SELECT string_agg(region,', ' ORDER BY region) FROM national_review_notice_regions nr WHERE nr.doc_id=national_review_notices.doc_id) AS publisher_region,published_date,index_url,CASE WHEN status='checked' THEN original_url ELSE NULL END AS original_url,status,last_checked_at,
+    COALESCE((SELECT json_agg(json_build_object('id',p.id,'name',p.name)) FROM review_extract_files f JOIN review_extracted_projects rp ON rp.file_url=f.url JOIN projects p ON p.id=rp.project_id WHERE f.page_url=national_review_notices.original_url AND national_review_notices.status='checked' AND f.status='extracted' AND rp.is_current),'[]'::json) AS extracted_projects
+    FROM national_review_notices WHERE ${where} ORDER BY published_date DESC,doc_id LIMIT 20 OFFSET $3`,[...args,(page-1)*20]);
   res.json({rows:rows.rows,total:count.rows[0].n,page,pageSize:20,note:'전국 지방정책정보 색인에 공개된 심의 문서입니다. 발행기관 지역은 현장 위치와 다르며, 문서 수는 프로젝트·참여업체 확보 건수가 아닙니다.'});
  }catch{res.status(500).json({error:'전국 심의 공개문서 조회 실패'});}
 });
@@ -1896,6 +1901,15 @@ app.get('/api/review-notices/coverage',async(req,res)=>{
   const counts=await query("SELECT nr.region AS publisher_region,COUNT(*)::int documents,COUNT(*) FILTER(WHERE n.status='checked')::int checked,COUNT(*) FILTER(WHERE n.status='error')::int failed FROM national_review_notices n LEFT JOIN national_review_notice_regions nr ON nr.doc_id=n.doc_id GROUP BY nr.region");
   res.json({streams:reviewStreams.map(s=>({...s,...states.rows.find(r=>r.id===s.id)})),counts:counts.rows,note:'전국 공개 색인 연결 상태입니다. 조회 성공이나 검색 결과 0건은 관할 전체 심의·현장·연락처 확보를 의미하지 않습니다.'});
  }catch{res.status(500).json({error:'전국 심의 연결 상태 조회 실패'});}
+});
+app.get('/api/review-extraction',async(req,res)=>{
+ try{
+  const files=await query(`SELECT f.url,f.page_url,f.name,f.format,f.status,f.record_count,f.last_checked_at,f.last_error,
+    COALESCE((SELECT json_agg(json_build_object('id',p.id,'name',p.name)) FROM review_extracted_projects r JOIN projects p ON p.id=r.project_id WHERE r.file_url=f.url AND r.is_current),'[]'::json) AS projects
+    FROM review_extract_files f ORDER BY f.last_checked_at DESC NULLS LAST,f.url LIMIT 30`);
+  const counts=await query("SELECT status,COUNT(*)::int files,COALESCE(SUM(record_count),0)::int records FROM review_extract_files GROUP BY status");
+  res.json({files:files.rows,counts:counts.rows,note:'현재 검증된 인천 건축경관공동위원회 PDF 서식을 자동 분석합니다. 한글·다른 PDF 서식은 미지원으로 구분하며 원문에 없는 업체·담당 연락처는 생성하지 않습니다.'});
+ }catch{res.status(500).json({error:'심의 원문 분석 상태 조회 실패'});}
 });
 app.get('/api/ingestion/freshness',async(req,res)=>{
  try{
@@ -1911,7 +1925,7 @@ app.get('/api/ingestion/freshness',async(req,res)=>{
    (SELECT COUNT(*)::int FROM seoul_review_files WHERE status='processed') AS processed_files,
    (SELECT COUNT(*)::int FROM seoul_review_files WHERE status='error') AS failed_files
    FROM seoul_review_state s WHERE id=1`);
-  res.json({enabled:automaticIngest.enabled(),configured:{permits:!!process.env.ARCH_HUB_SERVICE_KEY,bids:!!process.env.G2B_SERVICE_KEY,early:true,environment_review:true,seoul_review:true,national_review:true},sources:states.rows,coverage:coverage.rows[0],seoulReview:seoulReview.rows[0],catalogDate:regionCatalogMeta.retrievedOn,
+  res.json({enabled:automaticIngest.enabled(),configured:{permits:!!process.env.ARCH_HUB_SERVICE_KEY,bids:!!process.env.G2B_SERVICE_KEY,early:true,environment_review:true,seoul_review:true,national_review:true,review_extract:true},sources:states.rows,coverage:coverage.rows[0],seoulReview:seoulReview.rows[0],catalogDate:regionCatalogMeta.retrievedOn,
    note:'국토부는 내장된 전국 공식 지역코드로 순회 적재합니다. 지역 선택은 저장된 자료를 필터링하며, 지역별 수집 완료를 의미하지 않습니다. 처리량과 원천 반영 주기에 따라 지연될 수 있습니다.'});
  }catch{res.status(500).json({error:'자동 수집 현황 조회 실패'});}
 });
@@ -1926,6 +1940,6 @@ async function start() {
       ON CONFLICT(email) DO UPDATE SET password_hash=EXCLUDED.password_hash,role='admin',status='approved'`,[email,hash]);
   }
   const port = process.env.PORT || 10000;
-  app.listen(port, () => {console.log(`BUILD SIGNAL listening on ${port}`);automaticIngest.start();earlyCollector.start();directorySync.start();environmentCollector.start();seoulCollector.start();nationalReviewCollector.start();});
+  app.listen(port, () => {console.log(`BUILD SIGNAL listening on ${port}`);automaticIngest.start();earlyCollector.start();directorySync.start();environmentCollector.start();seoulCollector.start();nationalReviewCollector.start();reviewExtractor.start();});
 }
 start().catch(e => { console.error("Startup failed:", e); process.exit(1); });

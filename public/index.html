@@ -61,6 +61,7 @@
   <div id="projectResults" class="project-list"></div>
   <div class="pagination"><button class="button light" id="prevPage">← 이전</button><span id="pageInfo">1 / 1</span><button class="button light" id="nextPage">다음 →</button></div>
   <section class="panel" style="padding:16px;margin-top:24px" aria-labelledby="reviewNoticeTitle">
+    <details style="margin-bottom:16px"><summary>심의 원문 프로젝트·건축주 분석 현황</summary><div id="reviewExtractionResults" aria-live="polite">분석 상태 확인 중...</div></details>
     <h3 id="reviewNoticeTitle">전국 심의 공개문서</h3><p>국회도서관 지방정책정보에 공개된 전국 심의자료를 자동 탐색합니다. 개별 현장·참여업체 정보는 원문 확인 후 추출하며, 아래 문서 목록과 구분합니다.</p>
     <form id="reviewNoticeForm" class="filters"><label>발행기관 지역<select id="reviewNoticeRegion"><option value="">전체 지역</option></select></label><label>문서·발행기관 검색<input id="reviewNoticeKeyword" maxlength="100" placeholder="예: 건축위원회, 숙박시설"></label><button type="submit" class="button primary">공개문서 검색</button></form>
     <p id="reviewNoticeSummary" aria-live="polite">불러오는 중...</p><div id="reviewNoticeResults" class="project-list"></div><div class="pagination"><button type="button" class="button light" id="reviewNoticePrev" disabled>← 이전</button><button type="button" class="button light" id="reviewNoticeNext" disabled>다음 →</button></div>
