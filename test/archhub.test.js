@@ -16,7 +16,7 @@ test('only valid actual dates define the latest stage',()=>{
 function harness(items,options={}){
  const source=fs.readFileSync(require.resolve('../src/server'),'utf8');
  const stored=new Map(),urls=[];
- const ctx={permitLifecycle,permitDate,URL,AbortSignal,process:{env:{ARCH_HUB_SERVICE_KEY:'test-key'}},savePermitJob:async()=>{},
+ const ctx={recordAudit:async()=>{},permitLifecycle,permitDate,URL,AbortSignal,process:{env:{ARCH_HUB_SERVICE_KEY:'test-key'}},savePermitJob:async()=>{},
   fetch:async url=>{urls.push(new URL(url));return {ok:true,text:async()=>JSON.stringify({response:{header:{resultCode:options.error||'00'},body:{items:{item:items},totalCount:options.total??items.length}}})};},
   query:async(sql,args)=>{
    if(sql.includes("INSERT INTO auto_permit_regions"))return {rows:[]};

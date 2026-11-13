@@ -10,6 +10,7 @@ const { query, initDb, transaction } = require("./db");
 const { normalizeEvidence,insertEvidence,createEarlyCollector } = require("./early-projects");
 const { createDirectorySync,directoryMatches,coverageSummary,SOURCES:directorySources } = require("./organization-directory");
 const { profiles, scoreProject } = require("./scoring");
+const {recordAudit,auditView,summarize:summarizeArchhubProbe}=require("./archhub-audit");
 const { permitDate, permitLifecycle } = require("./archhub");
 const { createAutoIngest } = require("./auto-ingest");
 const {REGION_STATS_SQL,nationalCoverage}=require("./national-coverage");
@@ -370,7 +371,8 @@ app.get("/api/admin/g2b/status", loadUser, requireAdminRole, async (req,res) => 
 app.get('/api/admin/permits/status',loadUser,requireAdminRole,async(req,res)=>{
  try{
   const result=await query("SELECT COUNT(*)::int AS total, MAX(updated_at) AS last_updated, COUNT(*) FILTER (WHERE stage='PERMIT')::int AS permit, COUNT(*) FILTER (WHERE stage='STARTED')::int AS started, COUNT(*) FILTER (WHERE stage='COMPLETED')::int AS completed FROM projects WHERE source='arch_hub_permit'");
-  res.json({configured:!!process.env.ARCH_HUB_SERVICE_KEY,total:result.rows[0].total,last_updated:result.rows[0].last_updated,byStage:{PERMIT:result.rows[0].permit,STARTED:result.rows[0].started,COMPLETED:result.rows[0].completed},ingestion_enabled:true});
+  const audit=await query("SELECT * FROM archhub_api_audit WHERE operation='getApBasisOulnInfo'");
+  res.json({configured:!!process.env.ARCH_HUB_SERVICE_KEY,total:result.rows[0].total,last_updated:result.rows[0].last_updated,byStage:{PERMIT:result.rows[0].permit,STARTED:result.rows[0].started,COMPLETED:result.rows[0].completed},ingestion_enabled:true,seumteo:auditView(audit.rows[0])});
  }catch(e){res.status(500).json({error:'건축허가 수집 상태를 확인하지 못했습니다.'});}
 });
 
@@ -385,11 +387,9 @@ app.post('/api/admin/permits/test',loadUser,requireAdminRole,async(req,res)=>{
  try{url=new URL(endpoint);}catch{return res.status(400).json({error:'오퍼레이션 URL 형식이 올바르지 않습니다.'});}
  if(url.protocol!=='https:'||url.hostname!=='apis.data.go.kr'||!url.pathname.startsWith('/1613000/ArchPmsHubService/'))
   return res.status(400).json({error:'공식 건축HUB 오퍼레이션 URL만 허용됩니다.'});
- const today=new Date(),yesterday=new Date(today.getTime()-86400000);
- const ymd=d=>d.toISOString().slice(0,10).replace(/-/g,'');
  url.searchParams.set('serviceKey',key);
  url.searchParams.set('numOfRows','1');url.searchParams.set('pageNo','1');
- url.searchParams.set('_type','json');url.searchParams.set('sigunguCd','11680');url.searchParams.set('bjdongCd','10300');url.searchParams.set('startDate',ymd(yesterday));url.searchParams.set('endDate',ymd(today));
+ url.searchParams.set('_type','json');url.searchParams.set('sigunguCd','11680');url.searchParams.set('bjdongCd','10300');
  try{
   const response=await fetch(url,{signal:AbortSignal.timeout(15000)});
   const raw=await response.text();
@@ -399,6 +399,7 @@ app.post('/api/admin/permits/test',loadUser,requireAdminRole,async(req,res)=>{
   res.json({httpStatus:response.status,contentType:response.headers.get('content-type')||'',json:!!parsed,
    resultCode:String(header.resultCode||''),resultMsg:String(header.resultMsg||'').slice(0,160),
    hasItems:!!parsed?.response?.body?.items,hasTotalCount:parsed?.response?.body?.totalCount!==undefined,
+   sample:(()=>{const v=parsed?.response?.body?.items?.item;return summarizeArchhubProbe(Array.isArray(v)?v:v?[v]:[]);})(),
    note:'공식 가이드의 강남구 개포동 샘플 지역에 대한 읽기 전용 연결 시험입니다. 데이터 저장은 하지 않습니다.'});
  }catch(e){res.status(502).json({error:e.name==='TimeoutError'?'API 응답 시간 초과':'건축HUB API 연결 실패'});}
 });
@@ -457,6 +458,7 @@ async function permitSync(job,opts){
     if(result.rows[0]?.inserted)job.inserted++;else job.updated++;
     job.byStage[result.rows[0]?.stage||stage]++;
    }
+   await recordAudit(query,items,body.totalCount);
    job.total=Number(body.totalCount)||0;
    job.hasMore=!!items.length&&items.length===100&&!(job.total>0&&page*100>=job.total);
    job.nextPage=job.hasMore?page+1:1;
