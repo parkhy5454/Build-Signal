@@ -1866,7 +1866,7 @@ app.get("/login", (req,res)=>res.sendFile(path.join(__dirname,"..","public","log
 const hubCollector=createHubCollector({query,transaction});
 app.get("/api/ingestion/hub-construction",async(req,res)=>{try{res.json(await hubConstructionStatus(query));}catch{res.status(500).json({error:"HUB 관계자 연계 현황 조회 실패"});}});
 const awardCollector=createAwardCollector({query,transaction});
-registerAwardRoutes(app,{query,regionAliases});
+registerAwardRoutes(app,{query,regionAliases,loadUser});
 const earlyCollector=createEarlyCollector({query,transaction});
 const directorySync=createDirectorySync({query,transaction});
 const environmentCollector=createEnvironmentCollector({query,transaction});
