@@ -1,0 +1,15 @@
+const {test}=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
+const fixture=()=>({generated_at:'2026-11-15T00:00:00Z',summary:{projects:0,source_records:0,demo_excluded:0,with_party:0,with_contact:0,missing_area:0,missing_event_date:0,historical_only:0},sector:{procurement_backed:0,ownership_unclassified:0,note:'소유·시행주체 미판정'},hub:{enabled:false,status:'reuse_pending'},roles:[{role:'designer',organization:0,phone:0,email:0,named_contact:0}],stages:[],regions:[{region:'<img src=x onerror=alert(1)>',projects:0,with_party:0,with_contact:0}],sources:[],awards:{records:0,linked_notices:0,with_phone:0},notes:['<script>unsafe</script>']});
+function element(){return {innerHTML:'',textContent:'',disabled:false,events:{},addEventListener(name,fn){this.events[name]=fn;}};}
+test('admin readiness escapes labels, explains empty denominators and replaces reports on failure',async()=>{
+ const out=element(),button=element();let fail=false,url;
+ const ctx={document:{getElementById:id=>id==='dataReadiness'?out:button},fetch:async(u,opts)=>{url=u;assert.equal(opts.cache,'no-store');return {ok:!fail,json:async()=>fail?{error:'조회 거부'}:fixture()};}};vm.createContext(ctx);vm.runInContext(fs.readFileSync(require.resolve('../public/admin-data-readiness.js'),'utf8'),ctx);await new Promise(setImmediate);
+ assert.equal(url,'/api/admin/data-readiness');assert(out.innerHTML.includes('산출 대상 없음'));assert(out.innerHTML.includes('&lt;img'));assert(!out.innerHTML.includes('<img'));assert(!out.innerHTML.includes('<script>unsafe'));assert(!out.innerHTML.includes('NaN'));assert.equal(button.disabled,false);
+ fail=true;button.events.click();assert.equal(out.textContent,'저장 데이터 집계 중...');await new Promise(setImmediate);assert.equal(out.textContent,'점검표 조회 실패: 조회 거부');assert.equal(button.disabled,false);
+});
+test('contact coverage and group audit have independent query state and render combined counts without a scope error',async()=>{
+ const elements=new Map(),calls=[];const el=id=>{if(!elements.has(id))elements.set(id,element());return elements.get(id);};
+ const ctx={document:{getElementById:el},esc:v=>String(v||''),fetch:async url=>{calls.push(url);return {ok:true,json:async()=>url==='/api/admin/contacts/coverage'?{summary:{total:2},contacts:[]}:url==='/api/admin/project-groups/health'?{summary:{total_notices:2,total_groups:1,active_groups:1,linked_notices:2,unlinked_notices:0},recent_unlinked:[]}:{source_records:3,project_rows:1,combined_projects:1,exact_permit_bid_groups:1,confirmed_phase_links:0}};}};
+ vm.createContext(ctx);const src=fs.readFileSync(require.resolve('../public/admin.html'),'utf8'),start=src.indexOf('async function loadContactCoverage()');vm.runInContext(src.slice(start,src.indexOf('let groupPreviewCursor',start)),ctx);
+ await ctx.loadContactCoverage();assert.deepEqual(calls,['/api/admin/contacts/coverage']);await ctx.loadGroupHealth();assert.equal(el('refreshGroupHealth').disabled,false);assert(el('groupHealthSummary').textContent.includes('전체 원본 3건 → 사용자 프로젝트 1건'));assert(!el('groupHealthSummary').textContent.includes('실패'));
+});

@@ -29,6 +29,8 @@ jobs:
           node --check src/award-routes.js
           node --check src/hub-construction.js
           node --check src/unified-projects.js
+          node --check src/data-readiness.js
+          node --check public/admin-data-readiness.js
           node --check public/national-coverage.js
           node --check public/national-review.js
       - name: Check admin inline script
