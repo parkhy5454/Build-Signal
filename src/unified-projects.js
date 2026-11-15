@@ -6,6 +6,20 @@ unified_permit_keys AS (
  ${key('p.address')} AS location,${key('p.region')} AS region
  FROM projects p WHERE p.source='arch_hub_permit'
 ),
+unified_early_keys AS (
+ SELECT p.id,${key('p.name')} AS title,${key('p.owner')} AS owner,
+ ${key('p.address')} AS location,${key('p.region')} AS region
+ FROM projects p WHERE p.source IN ('public_review','environment_review','seoul_review','document_review')
+),
+unified_early_targets AS (
+ SELECT e.id,MIN(p.id) AS permit_id
+ FROM unified_early_keys e JOIN unified_permit_keys p
+ ON p.title=e.title AND p.location=e.location AND p.region=e.region
+ AND (e.owner='' OR p.owner='' OR e.owner=p.owner)
+ WHERE length(e.title)>=8 AND e.region<>''
+ AND length(e.location)>=8 AND e.location~'[0-9]'
+ GROUP BY e.id HAVING COUNT(DISTINCT p.id)=1
+),
 unified_group_keys AS (
  SELECT g.id,g.title,${key('g.title')} AS title_key,${key('g.owner')} AS owner,
  ${key('g.location')} AS location,${key('g.region')} AS region
@@ -24,9 +38,10 @@ unified_group_roots AS (
  LEFT JOIN unified_group_targets t ON t.id=g.id GROUP BY g.id,g.title,t.permit_id
 ),
 unified_identity AS (
- SELECT p.id AS project_id,COALESCE(g.canonical_id,l.permit_id,p.id) AS canonical_id
+ SELECT p.id AS project_id,COALESCE(g.canonical_id,l.permit_id,t.permit_id,p.id) AS canonical_id
  FROM projects p LEFT JOIN unified_group_roots g ON p.source='g2b_bid' AND p.project_group_id=g.id
  LEFT JOIN project_phase_links l ON l.early_id=p.id
+ LEFT JOIN unified_early_targets t ON t.id=p.id AND l.permit_id IS NULL
 ),
 unified_contacts AS (
  SELECT i.canonical_id,c.role,c.organization,c.person_name,c.phone,c.email
