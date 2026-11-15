@@ -1,4 +1,5 @@
 const {awardKey,SOURCE_URL}=require('./awards');
+const {config:hubConfig}=require('./hub-construction');
 const AWARD_RECORDS=`WITH records AS (
  SELECT 'award:'||a.id AS record_id,'public_award'::text AS kind,a.name,a.winner AS organization,a.owner,
  a.award_amount AS amount,a.award_date AS event_date,'최종낙찰일'::text AS date_label,
@@ -11,7 +12,7 @@ const AWARD_RECORDS=`WITH records AS (
  NULL::numeric,p.start_date,'실제착공일',e.phone,e.person_name,NULL::text,NULL::text,
  NULL::text,NULL::text,NULL::text,NULL::text,COALESCE(e.source_url,p.source_url),p.updated_at,p.id,p.region,p.area_sqm,p.start_date,p.completion_date
  FROM projects p LEFT JOIN LATERAL (
-  SELECT pe.organization,pe.source_url,pe.phone,pe.person_name FROM project_party_evidence pe WHERE pe.project_id=p.id AND pe.role='contractor' AND pe.observed_stage IN ('STARTED','COMPLETED') ORDER BY pe.observed_at DESC,pe.id DESC LIMIT 1
+  SELECT pe.organization,pe.source_url,pe.phone,pe.person_name FROM project_party_evidence pe WHERE pe.project_id=p.id AND pe.role='contractor' AND pe.observed_stage IN ('STARTED','COMPLETED') AND (pe.origin<>'hub_construction' OR EXISTS(SELECT 1 FROM hub_construction_checks h WHERE h.project_id=pe.project_id AND pe.id=ANY(h.current_evidence_ids))) ORDER BY pe.observed_at DESC,pe.id DESC LIMIT 1
  ) e ON TRUE
  WHERE p.source<>'demo' AND p.stage IN ('STARTED','COMPLETED') AND p.start_date IS NOT NULL
  AND (e.organization IS NOT NULL OR (NULLIF(BTRIM(p.contractor),'') IS NOT NULL AND p.source_url LIKE 'https://%'))
@@ -33,7 +34,7 @@ function registerAwardRoutes(app,{query,regionAliases,env=process.env}){
  app.get('/api/awards/status',async(req,res)=>{try{
   const row=(await query("SELECT last_attempt_at,last_success_at,last_error,next_due_at,lease_until FROM auto_ingest_state WHERE source='awards'")).rows[0]||{};
   res.json({enabled:env.AUTO_INGEST_ENABLED!=='false',keyConfigured:!!awardKey(env),...row,sourceUrl:SOURCE_URL,
-   constructionNote:'착공 시공사 목록은 출처가 있는 저장 자료만 표시합니다. HUB 관계자 추가 수집은 연결 검증 전이며, 공개 기본개요 API만으로 시공사가 채워지지 않습니다. 공공·민간 구분과 계약금액은 착공 기록만으로 확정하지 않습니다.'});
+   constructionNote:'착공 시공사 목록은 출처가 있는 저장 자료만 표시합니다. HUB 웹 관계자 연계: '+(hubConfig(env).enabled?'활성 · 현장별 대조 성공 여부는 확보 현황에서 확인':'비활성 · 재이용 범위 확인 및 활성화 설정 필요')+'. 공개 기본개요 API만으로 시공사가 채워지지 않습니다. 공공·민간 구분과 계약금액은 착공 기록만으로 확정하지 않습니다.'});
  }catch{res.status(500).json({error:'낙찰 수집 상태 조회 실패'});}});
  app.get('/api/awards',async(req,res)=>{
   let filter;try{filter=awardFilters(req.query,regionAliases);}catch(e){return res.status(400).json({error:e.message});}

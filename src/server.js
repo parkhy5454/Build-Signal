@@ -22,6 +22,7 @@ const {createSeoulCollector}=require("./seoul-review");
 const { meta:regionCatalogMeta,provinces,regionAliases,installRegionCatalog } = require("./region-catalog");
 
 const {createAwardCollector,awardKey}=require("./awards");
+const {createHubCollector,config:hubConstructionConfig,status:hubConstructionStatus}=require("./hub-construction");
 const {registerAwardRoutes}=require("./award-routes");
 
 const app = express();
@@ -1247,12 +1248,13 @@ app.get("/api/projects/:id", async (req, res) => {
     const masterId=master.rows[0]?.permit_id||req.params.id;
     const related=await query('SELECT early_id FROM project_phase_links WHERE permit_id=$1',[masterId]);
     const ids=[...new Set([String(masterId),String(req.params.id),...related.rows.map(x=>String(x.early_id))])];
-    const evidence=await query('SELECT * FROM project_party_evidence WHERE project_id=ANY($1::bigint[]) ORDER BY observed_at DESC,id DESC LIMIT 100',[ids]);
+    const evidence=await query("SELECT pe.*,CASE WHEN pe.origin='hub_construction' THEN EXISTS(SELECT 1 FROM hub_construction_checks h WHERE h.project_id=pe.project_id AND pe.id=ANY(h.current_evidence_ids)) ELSE NULL END AS hub_source_current FROM project_party_evidence pe WHERE pe.project_id=ANY($1::bigint[]) ORDER BY pe.observed_at DESC,pe.id DESC LIMIT 100",[ids]);
+    const hubChecks=await query('SELECT project_id,outcome,last_attempt_at,last_success_at,last_error,planned_start,planned_completion,reported_actual_start FROM hub_construction_checks WHERE project_id=ANY($1::bigint[])',[ids]);
     const phases=await query('SELECT id,name,stage,permit_date,start_date,completion_date,source_updated_at,source_url FROM projects WHERE id=ANY($1::bigint[]) ORDER BY source_updated_at NULLS LAST,id',[ids]);
     const directory=await directoryMatches(query,evidence.rows);
     const architecture=await query('SELECT a.*,p.source_updated_at AS review_date FROM architectural_review_details a JOIN projects p ON p.id=a.project_id WHERE a.project_id=ANY($1::bigint[])',[ids]);
     const environmental=await query('SELECT e.*,p.source_updated_at AS notice_date FROM environment_review_details e JOIN projects p ON p.id=e.project_id WHERE e.project_id=ANY($1::bigint[])',[ids]);
-    res.json({ ...r.rows[0], contacts: contacts.rows,awards:awards.rows,partyEvidence:evidence.rows,companyDirectory:directory,environmentalReviews:environmental.rows,architecturalReviews:architecture.rows,directoryCoverage:coverageSummary((await query('SELECT source,last_success_at,last_error,record_count FROM directory_sync_state')).rows),phaseProjects:phases.rows,masterProjectId:masterId,favorite: !!f.rowCount, pipeline: s.rows[0] || { status: "NEW", note: "" } });
+    res.json({ ...r.rows[0], contacts: contacts.rows,awards:awards.rows,hubConstruction:hubChecks.rows,partyEvidence:evidence.rows,companyDirectory:directory,environmentalReviews:environmental.rows,architecturalReviews:architecture.rows,directoryCoverage:coverageSummary((await query('SELECT source,last_success_at,last_error,record_count FROM directory_sync_state')).rows),phaseProjects:phases.rows,masterProjectId:masterId,favorite: !!f.rowCount, pipeline: s.rows[0] || { status: "NEW", note: "" } });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -1856,6 +1858,8 @@ app.post("/api/admin/demo-seed", requireAdmin, async (req,res) => {
 });
 
 app.get("/login", (req,res)=>res.sendFile(path.join(__dirname,"..","public","login.html")));
+const hubCollector=createHubCollector({query,transaction});
+app.get("/api/ingestion/hub-construction",async(req,res)=>{try{res.json(await hubConstructionStatus(query));}catch{res.status(500).json({error:"HUB 관계자 연계 현황 조회 실패"});}});
 const awardCollector=createAwardCollector({query,transaction});
 registerAwardRoutes(app,{query,regionAliases});
 const earlyCollector=createEarlyCollector({query,transaction});
@@ -1937,7 +1941,7 @@ app.get('/api/ingestion/freshness',async(req,res)=>{
    (SELECT COUNT(*)::int FROM seoul_review_files WHERE status='processed') AS processed_files,
    (SELECT COUNT(*)::int FROM seoul_review_files WHERE status='error') AS failed_files
    FROM seoul_review_state s WHERE id=1`);
-  res.json({enabled:automaticIngest.enabled(),configured:{permits:!!process.env.ARCH_HUB_SERVICE_KEY,bids:!!process.env.G2B_SERVICE_KEY,awards:!!awardKey(),early:true,environment_review:true,seoul_review:true,national_review:true,review_extract:true},sources:states.rows,coverage:coverage.rows[0],seoulReview:seoulReview.rows[0],catalogDate:regionCatalogMeta.retrievedOn,
+  res.json({enabled:automaticIngest.enabled(),configured:{permits:!!process.env.ARCH_HUB_SERVICE_KEY,bids:!!process.env.G2B_SERVICE_KEY,awards:!!awardKey(),hub_construction:hubConstructionConfig().enabled,early:true,environment_review:true,seoul_review:true,national_review:true,review_extract:true},sources:states.rows,coverage:coverage.rows[0],seoulReview:seoulReview.rows[0],catalogDate:regionCatalogMeta.retrievedOn,
    note:'국토부는 내장된 전국 공식 지역코드로 순회 적재합니다. 지역 선택은 저장된 자료를 필터링하며, 지역별 수집 완료를 의미하지 않습니다. 처리량과 원천 반영 주기에 따라 지연될 수 있습니다.'});
  }catch{res.status(500).json({error:'자동 수집 현황 조회 실패'});}
 });
@@ -1952,6 +1956,6 @@ async function start() {
       ON CONFLICT(email) DO UPDATE SET password_hash=EXCLUDED.password_hash,role='admin',status='approved'`,[email,hash]);
   }
   const port = process.env.PORT || 10000;
-  app.listen(port, () => {console.log(`BUILD SIGNAL listening on ${port}`);automaticIngest.start();awardCollector.start();earlyCollector.start();directorySync.start();environmentCollector.start();seoulCollector.start();nationalReviewCollector.start();reviewExtractor.start();});
+  app.listen(port, () => {console.log(`BUILD SIGNAL listening on ${port}`);automaticIngest.start();awardCollector.start();hubCollector.start();earlyCollector.start();directorySync.start();environmentCollector.start();seoulCollector.start();nationalReviewCollector.start();reviewExtractor.start();});
 }
 start().catch(e => { console.error("Startup failed:", e); process.exit(1); });
