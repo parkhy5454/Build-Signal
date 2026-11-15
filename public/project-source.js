@@ -22,8 +22,7 @@
   const target=classify(project.source_url,project.source,project.external_id),path=recordPath(project.id);
   const direct=['detail','document'].includes(target.kind);
   const primary=direct?'<a href="'+esc(target.url)+'" target="_blank" rel="noopener noreferrer">'+esc(target.label)+' ↗</a>':path?'<a href="'+esc(path)+'" target="_blank" rel="noopener noreferrer">프로젝트 수집 자료 확인 ↗</a>':'';
-  const secondary=direct?(path?'<a href="'+esc(path)+'" target="_blank" rel="noopener noreferrer">저장 자료 확인 ↗</a>':''):target.url?'<a href="'+esc(target.url)+'" target="_blank" rel="noopener noreferrer">'+esc(target.label)+' ↗</a>':'';
-  return primary||secondary?'<p class="source-footer">'+primary+(secondary?' · '+secondary:'')+'</p>':'';
+  return primary?'<p class="source-footer">'+primary+'</p>':'';
  }
  return {safeUrl,classify,recordPath,footer};
 });
