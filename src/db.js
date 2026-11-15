@@ -308,6 +308,18 @@ async function initDb() {
     );
     CREATE INDEX IF NOT EXISTS idx_project_contacts_project ON project_contacts(project_id);
     CREATE INDEX IF NOT EXISTS idx_project_contacts_role ON project_contacts(role);
+    -- Promote the verified actual start dates that older collector versions kept only in HUB checks.
+    UPDATE projects p SET start_date=COALESCE(p.start_date,h.reported_actual_start),
+      stage=CASE WHEN p.completion_date IS NOT NULL OR p.stage='COMPLETED' THEN 'COMPLETED' ELSE 'STARTED' END,
+      updated_at=NOW()
+    FROM hub_construction_checks h
+    WHERE h.project_id=p.id AND h.outcome='matched' AND h.reported_actual_start IS NOT NULL
+      AND p.source='arch_hub_permit';
+    UPDATE project_party_evidence pe SET observed_stage=CASE
+      WHEN p.completion_date IS NOT NULL OR p.stage='COMPLETED' THEN 'COMPLETED' ELSE 'STARTED' END
+    FROM hub_construction_checks h JOIN projects p ON p.id=h.project_id
+    WHERE pe.project_id=p.id AND pe.origin='hub_construction' AND pe.id=ANY(h.current_evidence_ids)
+      AND h.outcome='matched' AND h.reported_actual_start IS NOT NULL;
     CREATE TABLE IF NOT EXISTS project_groups (
       id BIGSERIAL PRIMARY KEY,
       group_key TEXT NOT NULL UNIQUE,
