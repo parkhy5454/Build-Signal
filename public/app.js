@@ -12,7 +12,7 @@ function emptyProjectSearch(d){
  const coverage=d.coverage&&total>0?'<p class="muted">현재 저장된 단계별 현장 '+Object.entries(stageLabel).filter(([key])=>Number(counts[key]||0)>0).map(([key,label])=>esc(label)+' '+fmt(counts[key])+'건').join(' · ')+'</p>':'';
  return `<div class="panel"><p>${esc(message)}</p>${coverage}${stages}</div>`;
 }
-window.searchStage=value=>{const select=$('stage');if(select){select.value=value;search(1);}};
+function searchStage(value){const select=$('stage');if(select){select.value=value;search(1);}}
 function fmt(n){return Number(n||0).toLocaleString("ko-KR");}
 function displayStage(p){return p.source==='environment_review'&&p.stage==='REVIEW'?'환경평가 공람(공개 시점)':stageLabel[p.stage]||'확인 필요';}
 function card(p,score){
