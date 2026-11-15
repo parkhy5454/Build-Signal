@@ -24,14 +24,20 @@ async function contactSummary(){
  }catch(e){$('contactSummary').innerHTML=`<div class="notice">${esc(e.message)}</div>`;}
 }
 async function dashboard(){try{const d=await api("/api/dashboard");$("total").textContent=fmt(d.total);const m=Object.fromEntries(d.byStage.map(x=>[x.stage,x.n]));$("permit").textContent=fmt(m.PERMIT);$("started").textContent=fmt(m.STARTED);$("favoritesCount").textContent=fmt(d.favorites);$("demoNotice").hidden=!d.demo;contactSummary();$("recent").innerHTML=d.recent.length?d.recent.map(p=>card(p)).join(""):'<div class="panel">등록된 현장이 없습니다. 실제 데이터 또는 데모 데이터를 적재해 주세요.</div>'; }catch(e){$("recent").innerHTML=`<div class="notice">${esc(e.message)}</div>`;}}
+function minimumAreaValue(){return $('minArea').value==='custom'?$('customArea').value:$('minArea').value;}
+function syncCustomArea(focus=false){
+ const custom=$('minArea').value==='custom';$('customAreaWrap').hidden=!custom;$('customArea').disabled=!custom;$('customArea').required=custom;
+ if(custom&&focus)$('customArea').focus();
+}
 async function search(page=1){
+ if($('minArea').value==='custom'&&!$('customArea').reportValidity())return;
  searchPage=Math.max(1,page);const request=++searchRequest;lastSearchRows=[];$('exportPage').disabled=true;$('projectResults').setAttribute('aria-busy','true');$('resultCount').textContent='검색 조건에 맞는 프로젝트를 찾는 중입니다.';
  const period=$("searchPeriod").value;
  const today=new Date();const localDay=d=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
  const fromDate=new Date(today.getFullYear(),today.getMonth(),today.getDate()-(Number(period)||0)+1);
  const from=period==="custom"?$("searchFrom").value:period?localDay(fromDate):"";
  const to=period==="custom"?$("searchTo").value:period?localDay(today):"";
- const params=new URLSearchParams({dateField:$("dateField").value,from,to,q:$("q").value,region:$("region").value,stage:$("stage").value==='EARLY'?'':$("stage").value,phase:$("stage").value==='EARLY'?'early':'',minArea:$("minArea").value,unknownArea:$("unknownArea").checked?'1':'0',sort:$("projectSort").value,type:$("type").value,contact:$("contactFilter").value,page:String(searchPage),limit:"30"});
+ const params=new URLSearchParams({dateField:$("dateField").value,from,to,q:$("q").value,region:$("region").value,stage:$("stage").value==='EARLY'?'':$("stage").value,phase:$("stage").value==='EARLY'?'early':'',minArea:minimumAreaValue(),unknownArea:$("unknownArea").checked?'1':'0',sort:$("projectSort").value,type:$("type").value,page:String(searchPage),limit:"30"});
  try{
   const d=await api("/api/projects?"+params);if(request!==searchRequest)return;lastSearchRows=d.rows;
   searchTotalPages=Math.max(1,d.pages||1);
@@ -149,13 +155,16 @@ function architecturalReviewHtml(rows){
 }
 
 function updateFilterSummary(){
- const labels=[];if($('region').value)labels.push($('region').selectedOptions[0].textContent);if($('stage').value)labels.push($('stage').selectedOptions[0].textContent);if($('type').value)labels.push('용도·공종 '+$('type').value);if($('minArea').value)labels.push('연면적 '+fmt($('minArea').value)+'㎡ 이상'+($('unknownArea').checked?' · 미확인 포함':' · 미확인 제외'));if($('contactFilter').value)labels.push($('contactFilter').selectedOptions[0].textContent);if($('q').value)labels.push('검색어 '+$('q').value);
+ const labels=[];if($('region').value)labels.push($('region').selectedOptions[0].textContent);if($('stage').value)labels.push($('stage').selectedOptions[0].textContent);if($('type').value)labels.push('용도·공종 '+$('type').value);if(minimumAreaValue()!=='')labels.push('연면적 '+fmt(minimumAreaValue())+'㎡ 이상'+($('unknownArea').checked?' · 미확인 포함':' · 미확인 제외'));if($('q').value)labels.push('검색어 '+$('q').value);
  $('activeFilterSummary').textContent=labels.length?labels.join(' / '):'전체 지역 · 전체 단계 · 규모 제한 없음';
- document.querySelectorAll('[data-quick]').forEach(b=>{const k=b.dataset.quick;const on=k==='large'?$('minArea').value==='10000':k==='bid'?$('stage').value==='BID':k==='early'?$('stage').value==='EARLY':k==='hotel'?$('type').value==='숙박시설':k==='office'?$('type').value==='업무시설':k==='designer'?$('contactFilter').value==='designer':$('searchPeriod').value==='30'&&$('dateField').value==='collected';b.classList.toggle('selected',on);b.setAttribute('aria-pressed',String(on));});
+ document.querySelectorAll('[data-quick]').forEach(b=>{const k=b.dataset.quick;const on=k==='large'?minimumAreaValue()!==''&&Number(minimumAreaValue())===10000:k==='bid'?$('stage').value==='BID':k==='early'?$('stage').value==='EARLY':k==='hotel'?$('type').value==='숙박시설':k==='office'?$('type').value==='업무시설':$('searchPeriod').value==='30'&&$('dateField').value==='collected';b.classList.toggle('selected',on);b.setAttribute('aria-pressed',String(on));});
 }
-for(const id of ['minArea','unknownArea','projectSort','stage','contactFilter'])$(id).addEventListener('change',()=>search(1));
-$('resetSearch').addEventListener('click',()=>{$('projectSearchForm').reset();$('projectSort').value='priority';$('searchFromWrap').hidden=true;$('searchToWrap').hidden=true;search(1);});
-document.querySelectorAll('[data-quick]').forEach(b=>b.addEventListener('click',()=>{const k=b.dataset.quick;if(k==='bid')$('stage').value=$('stage').value==='BID'?'':'BID';if(k==='large')$('minArea').value=$('minArea').value==='10000'?'':'10000';if(k==='early')$('stage').value=$('stage').value==='EARLY'?'':'EARLY';if(k==='hotel'||k==='office'){const v=k==='hotel'?'숙박시설':'업무시설';$('type').value=$('type').value===v?'':v;}if(k==='designer')$('contactFilter').value=$('contactFilter').value==='designer'?'':'designer';if(k==='recent'){$('searchPeriod').value=$('searchPeriod').value==='30'?'':'30';$('dateField').value='collected';$('searchFromWrap').hidden=true;$('searchToWrap').hidden=true;}search(1);}));
+for(const id of ['unknownArea','projectSort','stage'])$(id).addEventListener('change',()=>search(1));
+$('minArea').addEventListener('change',()=>{syncCustomArea(true);if($('minArea').value!=='custom'||$('customArea').value!=='')search(1);});
+$('customArea').addEventListener('change',()=>search(1));
+syncCustomArea();
+$('resetSearch').addEventListener('click',()=>{$('projectSearchForm').reset();syncCustomArea();$('projectSort').value='priority';$('searchFromWrap').hidden=true;$('searchToWrap').hidden=true;search(1);});
+document.querySelectorAll('[data-quick]').forEach(b=>b.addEventListener('click',()=>{const k=b.dataset.quick;if(k==='bid')$('stage').value=$('stage').value==='BID'?'':'BID';if(k==='large'){$('minArea').value=minimumAreaValue()==='10000'?'':'10000';syncCustomArea();}if(k==='early')$('stage').value=$('stage').value==='EARLY'?'':'EARLY';if(k==='hotel'||k==='office'){const v=k==='hotel'?'숙박시설':'업무시설';$('type').value=$('type').value===v?'':v;}if(k==='recent'){$('searchPeriod').value=$('searchPeriod').value==='30'?'':'30';$('dateField').value='collected';$('searchFromWrap').hidden=true;$('searchToWrap').hidden=true;}search(1);}));
 $('exportPage').addEventListener('click',()=>{if(!lastSearchRows.length)return;const blob=new Blob([ProjectWorkspace.csv(lastSearchRows,displayStage)],{type:'text/csv;charset=utf-8;'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download='BUILD-SIGNAL_현재페이지.csv';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);});
 
 function hubConstructionHtml(rows){
