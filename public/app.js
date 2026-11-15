@@ -144,6 +144,7 @@ function architecturalReviewHtml(rows){
 
 function updateFilterSummary(){
  const labels=[];if($('region').value)labels.push($('region').selectedOptions[0].textContent);if($('stage').value)labels.push($('stage').selectedOptions[0].textContent);if($('type').value)labels.push('용도·공종 '+$('type').value);if(minimumAreaValue()!=='')labels.push('연면적 '+fmt(minimumAreaValue())+'㎡ 이상'+($('unknownArea').checked?' · 미확인 포함':' · 미확인 제외'));if($('q').value)labels.push('검색어 '+$('q').value);
+ const period=$('searchPeriod').value,basis=$('dateField').selectedOptions[0]?.textContent||'';if(period==='custom'){const from=$('searchFrom').value,to=$('searchTo').value;if(from||to)labels.push((from||'시작일 미지정')+' ~ '+(to||'종료일 미지정')+' · '+basis);}else if(period)labels.push(({7:'최근 7일',30:'최근 30일',90:'최근 3개월',365:'최근 1년'})[period]+' · '+basis);
  $('activeFilterSummary').textContent=labels.join(' / ');$('activeFilterSummary').hidden=!labels.length;
  document.querySelectorAll('[data-quick]').forEach(b=>{const k=b.dataset.quick;const on=k==='large'?minimumAreaValue()!==''&&Number(minimumAreaValue())===10000:k==='bid'?$('stage').value==='BID':k==='early'?$('stage').value==='EARLY':k==='hotel'?$('type').value==='숙박시설':k==='office'?$('type').value==='업무시설':$('searchPeriod').value==='30'&&$('dateField').value==='collected';b.classList.toggle('selected',on);b.setAttribute('aria-pressed',String(on));});
 }
