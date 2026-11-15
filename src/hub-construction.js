@@ -34,7 +34,8 @@ function parseDetail(payload,project){
   if(r.pmsrgstSeqno!==ledger||clean(r.addr)!==addr||r.archPmsDate!==first.archPmsDate)throw Error('HUB 관리번호·현장 식별자 혼합 또는 불일치');
   for(const k of ['stcnsPrrngDate','edcnsPrrngDate','realStcnsDate'])if(r[k]!=null&&r[k]!==''&&r[k]!==first[k])throw Error('HUB 일정 필드 혼합');
  }
- const stage=['PERMIT','STARTED','COMPLETED'].includes(project.stage)?project.stage:'PERMIT';
+ const actualStart=permitDate(first.realStcnsDate);
+ const stage=project.stage==='COMPLETED'?'COMPLETED':actualStart?'STARTED':['PERMIT','STARTED'].includes(project.stage)?project.stage:'PERMIT';
  const parties=[],seen=new Set();let withheld=0;
  for(const r of rows){
   const role=ROLES[clean(r.partcpnt)],organization=clean(r.offcnm);
@@ -49,7 +50,7 @@ function parseDetail(payload,project){
   const key=hash(JSON.stringify(e));if(!seen.has(key)){seen.add(key);parties.push(e);}
  }
  const plannedStart=permitDate(first.stcnsPrrngDate),plannedEnd=permitDate(first.edcnsPrrngDate);
- return {outcome:'matched',ledger,parties,withheld,plannedStart,plannedEnd,actualStart:permitDate(first.realStcnsDate),permitDate:date};
+ return {outcome:'matched',ledger,parties,withheld,plannedStart,plannedEnd,actualStart,permitDate:date};
 }
 function createPublicClient({fetcher=fetch}={}){
  let session=null;
@@ -90,6 +91,10 @@ async function saveDetail(transaction,token,project,record){
    await q("DELETE FROM project_contacts WHERE project_id=$1 AND source='hub_construction'",[project.id]);
    for(const e of record.parties.filter(e=>['designer','contractor','supervisor'].includes(e.role)))await q(`INSERT INTO project_contacts(project_id,role,organization,phone,source,source_url)
     VALUES($1,$2,$3,$4,'hub_construction',$5) ON CONFLICT(project_id,role,organization,source) DO UPDATE SET phone=EXCLUDED.phone,source_url=EXCLUDED.source_url,updated_at=NOW()`,[project.id,e.role,e.organization,e.phone,PAGE]);
+   if(record.actualStart)await q(`UPDATE projects SET start_date=COALESCE(start_date,$2::date),stage=CASE
+    WHEN completion_date IS NOT NULL OR stage='COMPLETED' THEN 'COMPLETED'
+    ELSE 'STARTED' END,updated_at=NOW()
+    WHERE id=$1 AND source='arch_hub_permit'`,[project.id,record.actualStart]);
   }
   // A missing web record is not proof that a previously observed party withdrew.
   await q(`INSERT INTO hub_construction_checks(project_id,ledger_id,outcome,last_attempt_at,last_success_at,next_due_at,current_evidence_ids,planned_start,planned_completion,reported_actual_start,withheld_count)
