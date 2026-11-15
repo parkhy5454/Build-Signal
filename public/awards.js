@@ -3,8 +3,7 @@
  const day=v=>v?String(v).slice(0,10):'미확인',money=v=>v===null||v===undefined||v===''?'금액 미확인':String(v).replace(/\B(?=(\d{3})+(?!\d))/g,',')+'원';
  const kind=r=>r.kind==='public_award'?'공공 최종낙찰':'착공 시공사 확인';
  const link=v=>{try{const u=new URL(v);return u.protocol==='https:'&&!u.username&&!u.password?u.href:'';}catch{return '';}};
- const dateValue=d=>d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
- function setRecentAwardRange(){const today=new Date(),start=new Date(today.getFullYear(),today.getMonth(),today.getDate()-29);$('awardFrom').value=dateValue(start);$('awardTo').value=dateValue(today);}
+ function setRecentAwardRange(){$('awardFrom').value='';$('awardTo').value='';}
  let request=0,page=1,pages=1,rows=[],regionsReady=false;
  async function get(url){const r=await fetch(url);const d=await r.json();if(!r.ok)throw Error(d.error||'조회 실패');return d;}
  function render(r,i){return '<tr><td><b>'+esc(r.name)+'</b><small>'+esc(r.owner||'발주 주체 미확인')+'</small></td><td><span class="stage-badge">'+kind(r)+'</span><small>'+esc(r.region||'현장 지역 미확인')+'</small></td><td><b>'+esc(r.organization)+'</b><small>'+esc(r.phone?'회사 전화 '+r.phone:'연락처 미확인')+'</small></td><td class="numeric">'+esc(money(r.amount))+'</td><td>'+esc(day(r.event_date))+'<small>'+esc(r.date_label)+'</small></td><td><button class="row-detail" type="button" onclick="awardDetails('+i+')">상세 ↗</button></td></tr>';}
