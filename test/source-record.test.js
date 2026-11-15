@@ -2,7 +2,7 @@ const {test}=require('node:test'),assert=require('node:assert/strict'),fs=requir
 const links=require('../public/project-source'),{readSourceRecord,registerSourceRecordRoute}=require('../src/source-record');
 const provider='https://www.data.go.kr/data/15136267/openapi.do';
 test('API guides and generic lookup pages link first to the exact stored project, never pretend to be its original notice',()=>{
- const html=links.footer({id:'12',source:'arch_hub_permit',source_url:provider});assert(html.includes('href="/source-record.html?projectId=12"'));assert(html.indexOf('/source-record.html')<html.indexOf(provider));assert(html.includes('프로젝트 수집 자료 확인'));assert(html.includes('데이터 제공기관 안내'));assert(!html.includes('원본 공고 확인'));
+ const html=links.footer({id:'12',source:'arch_hub_permit',source_url:provider});assert(html.includes('href="/source-record.html?projectId=12"'));assert(!html.includes(provider));assert(html.includes('프로젝트 수집 자료 확인'));assert(!html.includes('데이터 제공기관 안내'));assert.equal(links.classify(provider).kind,'provider');assert(!html.includes('원본 공고 확인'));
  assert.equal(links.classify('https://www.hub.go.kr/portal/gis/css/idx-css-list.do').kind,'lookup');assert.equal(links.classify('https://www.example.go.kr/').kind,'reference');assert.equal(links.recordPath('12&evil=1'),null);
 });
 test('only a matching provided G2B number and revision becomes a notice-detail link; unsafe or secret URLs are omitted',()=>{
