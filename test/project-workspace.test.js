@@ -30,5 +30,11 @@ test('real PostgreSQL combines scale, unknown scale, early stage, region and sor
   assert.equal((await search({sort:'area'})).rows[0].name,'착공 호텔');
   assert.equal((await search({sort:'priority'})).rows[0].stage,'REVIEW');
   assert.equal((await search({q:'착공',sort:'recent'})).total,1);
+  await query("INSERT INTO projects(name,stage,area_sqm) VALUES ('소규모 99','PERMIT',99),('소규모 100','PERMIT',100),('소규모 249.5','PERMIT',249.5),('소규모 250','PERMIT',250),('소규모 500','PERMIT',500),('소규모 미확인','PERMIT',NULL)");
+  assert.equal((await search({q:'소규모',minArea:'100'})).total,4);
+  assert.equal((await search({q:'소규모',minArea:'250'})).total,2);
+  assert.equal((await search({q:'소규모',minArea:'249.5'})).total,3);
+  assert.equal((await search({q:'소규모',minArea:'250',unknownArea:'1'})).total,3);
+
  }finally{await db.close();}
 });
