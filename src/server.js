@@ -25,6 +25,7 @@ const {createAwardCollector,awardKey}=require("./awards");
 const {createHubCollector,config:hubConstructionConfig,status:hubConstructionStatus}=require("./hub-construction");
 const {registerAwardRoutes}=require("./award-routes");
 const {registerDataReadinessRoute}=require("./data-readiness");
+const {registerSourceRecordRoute}=require("./source-record");
 const {searchScope,relatedProjects,unificationSummary}=require("./unified-projects");
 
 const app = express();
@@ -945,6 +946,7 @@ app.post('/api/admin/permits/batch',loadUser,requireAdminRole,(req,res)=>{
 
 
 registerDataReadinessRoute(app,{query,loadUser,requireAdminRole,provinces});
+registerSourceRecordRoute(app,{query,loadUser});
 
 // 관리자 전용 연락처 확보율과 현장별 담당자 목록
 app.get('/api/admin/contacts/coverage', loadUser, requireAdminRole, async (req,res) => {
@@ -1074,7 +1076,7 @@ app.get('/api/project-groups/:id',async(req,res)=>{
   if(!/^\d+$/.test(req.params.id))return res.status(400).json({error:'잘못된 프로젝트 번호'});
   const g=await query('SELECT * FROM project_groups WHERE id=$1',[req.params.id]);
   if(!g.rowCount)return res.status(404).json({error:'프로젝트를 찾을 수 없습니다.'});
-  const notices=await query(`SELECT p.id,p.name AS notice_title,p.building_type,p.stage,p.estimated_cost,p.source_url,p.owner,p.address,
+  const notices=await query(`SELECT p.id,p.external_id,p.source,p.name AS notice_title,p.building_type,p.stage,p.estimated_cost,p.source_url,p.owner,p.address,
     COALESCE(json_agg(json_build_object('role',c.role,'organization',c.organization,'department',c.department,'person_name',c.person_name,'phone',c.phone,'email',c.email,'source',c.source,'source_url',c.source_url,'verified_at',c.verified_at,'updated_at',c.updated_at)) FILTER (WHERE c.id IS NOT NULL),'[]'::json) AS contacts
     FROM projects p LEFT JOIN project_contacts c ON c.project_id=p.id
     WHERE p.project_group_id=$1 GROUP BY p.id ORDER BY p.updated_at DESC`,[req.params.id]);
@@ -1253,7 +1255,7 @@ app.get("/api/projects/:id", async (req, res) => {
     const ids=linked.ids.length?linked.ids:[String(req.params.id)],masterId=linked.canonicalId;
     const awards=await query(`SELECT DISTINCT a.* FROM construction_awards a JOIN projects p ON p.source='g2b_bid' AND p.external_id=a.notice_no||'-'||a.notice_ord WHERE p.id=ANY($1::bigint[]) ORDER BY a.award_date DESC NULLS LAST,a.id DESC LIMIT 100`,[ids]);
     const contacts=await query(`SELECT role,organization,department,person_name,phone,email,source,source_url,verified_at,updated_at FROM project_contacts WHERE project_id=ANY($1::bigint[]) ORDER BY role,updated_at DESC`,[ids]);
-    const notices=await query(`SELECT p.id,p.name AS notice_title,p.building_type,p.stage,p.estimated_cost,p.source_url,p.owner,p.address,
+    const notices=await query(`SELECT p.id,p.external_id,p.source,p.name AS notice_title,p.building_type,p.stage,p.estimated_cost,p.source_url,p.owner,p.address,
       COALESCE((SELECT json_agg(c ORDER BY c.updated_at DESC) FROM project_contacts c WHERE c.project_id=p.id),'[]'::json) AS contacts
       FROM projects p WHERE p.source='g2b_bid' AND p.id=ANY($1::bigint[]) ORDER BY p.updated_at DESC,p.id DESC`,[ids]);
     const groupContacts=await query(`SELECT c.role,c.organization,c.department,c.person_name,c.phone,c.email,c.source,c.source_url,c.verified_at,c.updated_at
