@@ -16,7 +16,7 @@
     <a href="#recommend" data-page="recommend"><span class="nav-icon">↗</span> 영업 추천</a>
     <a href="#dashboard" data-page="dashboard"><span class="nav-icon">◴</span> 수집 요약</a>
   </nav>
-  <div class="sidebar-bottom"><b>근거가 있는 영업정보</b><br>확인된 정보와 미확인 항목을<br>명확하게 구분합니다.<div class="sidebar-version">BUILD SIGNAL · WORKSPACE</div></div>
+  <div class="sidebar-bottom"><div class="sidebar-version">BUILD SIGNAL · WORKSPACE</div></div>
 </aside>
 <main class="main">
 <header class="topbar"><div class="topbar-heading"><span class="eyebrow">WORKSPACE / PROJECTS</span><h1 id="pageTitle">건설 프로젝트</h1></div><div class="top-actions"><span class="pill">전국 프로젝트</span></div></header>
@@ -47,8 +47,8 @@
   <div class="pagination"><button class="button light" id="prevPage">← 이전</button><span id="pageInfo">1 / 1</span><button class="button light" id="nextPage">다음 →</button></div>
 </section>
 <section id="recommend" class="page">
-  <div class="panel"><h3>우리 제품에 맞는 영업현장 찾기</h3><p class="muted">업종을 고르거나 제품·서비스를 입력하고 지역을 선택하면 관련 현장과 추천 이유를 확인할 수 있습니다.</p>
-  <form id="recommendForm" class="recommend-controls"><label>영업 업종<select id="profile"><option value="automation">자동제어·스마트빌딩</option><option value="electrical">전기·통신·소방</option><option value="hvac">조명·공조·HVAC</option><option value="materials">건축자재·설비</option></select></label><label>제품·서비스 (선택)<input id="recommendProduct" maxlength="120" placeholder="예: 호텔 객실제어, 조명제어, 냉난방 밸브"></label><label>시·도<select id="recommendRegion"><option value="">전국 전체</option></select></label><button class="button primary" id="recommendBtn" type="submit">추천 현장 분석</button></form><p id="recommendSummary" aria-live="polite"></p></div>
+  <div class="panel"><h3>우리 제품에 맞는 영업현장 찾기</h3>
+  <form id="recommendForm" class="recommend-controls"><label>영업 업종<select id="profile"><option value="automation">자동제어·스마트빌딩</option><option value="electrical">전기·통신·소방</option><option value="hvac">조명·공조·HVAC</option><option value="materials">건축자재·설비</option></select></label><label>제품·서비스 (선택)<input id="recommendProduct" maxlength="120" placeholder="예: 호텔 객실제어, 조명제어, 냉난방 밸브"></label><label>시·도<select id="recommendRegion"><option value="">전국 전체</option></select></label><button class="button primary" id="recommendBtn" type="submit">추천 현장 분석</button></form><p id="recommendSummary" aria-live="polite" hidden></p></div>
   <div id="recommendResults" class="project-list"></div>
 </section>
 <section id="awards" class="page">
