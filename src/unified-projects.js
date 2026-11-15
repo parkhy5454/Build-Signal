@@ -60,7 +60,7 @@ unified_stats AS (
 function searchScope(clause=''){
  return UNIFIED_PROJECTS+`, unified_matches AS (
  -- Search and count original source rows; project identity matching is enrichment only.
- SELECT DISTINCT ui.project_id AS canonical_id FROM projects p JOIN unified_identity ui ON ui.project_id=p.id ${clause}
+ SELECT DISTINCT ui.project_id AS project_id FROM projects p JOIN unified_identity ui ON ui.project_id=p.id ${clause}
 )`;
 }
 async function relatedProjects(query,id){
