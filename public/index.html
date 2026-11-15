@@ -45,7 +45,6 @@
   <div class="results-toolbar"><div><h3>프로젝트 목록 <span id="resultCountSummary">—</span></h3><p id="resultCount" aria-live="polite">검색 결과를 불러옵니다.</p><p id="activeFilterSummary" class="active-filter-summary" hidden></p></div><div class="result-actions"><label class="sr-only" for="projectSort">프로젝트 정렬</label><select id="projectSort"><option value="priority">심의·인허가 우선</option><option value="area">연면적 큰 순</option><option value="recent">최근 정보 갱신 순</option></select><button type="button" class="button light" id="exportPage" disabled>↓ 현재 페이지 CSV</button></div></div>
   <div id="projectResults" class="project-list workspace-results" aria-busy="true"></div>
   <div class="pagination"><button class="button light" id="prevPage">← 이전</button><span id="pageInfo">1 / 1</span><button class="button light" id="nextPage">다음 →</button></div>
-  <p class="workspace-footnote">규모·참여업체·날짜는 확보된 데이터만 표시합니다. 정보가 없는 현장은 ‘미확인’으로 표시하며, 공정률을 임의로 계산하지 않습니다.</p>
 </section>
 <section id="recommend" class="page">
   <div class="panel"><h3>우리 제품에 맞는 영업현장 찾기</h3><p class="muted">업종을 고르거나 제품·서비스를 입력하고 지역을 선택하면 관련 현장과 추천 이유를 확인할 수 있습니다.</p>
@@ -53,7 +52,6 @@
   <div id="recommendResults" class="project-list"></div>
 </section>
 <section id="awards" class="page">
- <div class="workspace-intro"><div><span class="eyebrow">AWARDS &amp; CONTRACTORS</span><h2>누가 맡았는지, 근거와 함께 확인하세요.</h2><p>공공 최종낙찰과 착공 시공사 확인 자료를 구분해 비교합니다.</p></div></div>
  <form id="awardForm" class="award-form panel">
   <label>공사명·업체·공고번호<input id="awardQ" placeholder="공사명 또는 낙찰업체 검색"></label>
   <label>확인 구분<select id="awardKind"><option value="">전체</option><option value="public_award">공공 최종낙찰</option><option value="construction_contractor">착공 시공사 확인 (공공·민간 미구분)</option></select></label>
@@ -64,10 +62,8 @@
   <div class="award-form-actions"><button class="button primary" type="submit">검색</button><button class="button light" type="button" id="awardReset">초기화</button></div>
  </form>
  <div class="results-toolbar"><div><h3>수주·낙찰 목록</h3><p id="awardCount" aria-live="polite">조회 대기</p></div><button class="button light" id="awardExport" type="button" disabled>↓ 현재 페이지 CSV</button></div>
- <p class="workspace-footnote">최소 낙찰금액을 적용하면 금액 미확인 자료는 제외됩니다. 지역 미확인 자료는 전체 지역에서 확인할 수 있습니다.</p>
  <div id="awardResults" class="workspace-results" aria-busy="false"></div>
  <div class="pagination"><button class="button light" id="awardPrev" disabled>← 이전</button><span id="awardPage">1 / 1</span><button class="button light" id="awardNext" disabled>다음 →</button></div>
- <p id="awardNote" class="workspace-footnote">공공 최종낙찰과 착공 시공사 확인은 계약 확정 자료와 구분합니다.</p>
 </section>
 <section id="favorites" class="page"><div class="section-head"><div><h3>관심 현장</h3><p>영업 후보로 저장한 현장</p></div></div><div id="favoriteResults" class="project-list"></div></section>
 </main>
