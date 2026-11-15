@@ -24,6 +24,7 @@ const { meta:regionCatalogMeta,provinces,regionAliases,installRegionCatalog } = 
 const {createAwardCollector,awardKey}=require("./awards");
 const {createHubCollector,config:hubConstructionConfig,status:hubConstructionStatus}=require("./hub-construction");
 const {registerAwardRoutes}=require("./award-routes");
+const {registerDataReadinessRoute}=require("./data-readiness");
 const {searchScope,relatedProjects,unificationSummary}=require("./unified-projects");
 
 const app = express();
@@ -942,6 +943,8 @@ app.post('/api/admin/permits/batch',loadUser,requireAdminRole,(req,res)=>{
  res.status(202).json({job:permitJob});
 });
 
+
+registerDataReadinessRoute(app,{query,loadUser,requireAdminRole,provinces});
 
 // 관리자 전용 연락처 확보율과 현장별 담당자 목록
 app.get('/api/admin/contacts/coverage', loadUser, requireAdminRole, async (req,res) => {
