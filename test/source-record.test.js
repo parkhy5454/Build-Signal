@@ -1,0 +1,29 @@
+const {test}=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
+const links=require('../public/project-source'),{readSourceRecord,registerSourceRecordRoute}=require('../src/source-record');
+const provider='https://www.data.go.kr/data/15136267/openapi.do';
+test('API guides and generic lookup pages link first to the exact stored project, never pretend to be its original notice',()=>{
+ const html=links.footer({id:'12',source:'arch_hub_permit',source_url:provider});assert(html.includes('href="/source-record.html?projectId=12"'));assert(html.indexOf('/source-record.html')<html.indexOf(provider));assert(html.includes('프로젝트 수집 자료 확인'));assert(html.includes('데이터 제공기관 안내'));assert(!html.includes('원본 공고 확인'));
+ assert.equal(links.classify('https://www.hub.go.kr/portal/gis/css/idx-css-list.do').kind,'lookup');assert.equal(links.classify('https://www.example.go.kr/').kind,'reference');assert.equal(links.recordPath('12&evil=1'),null);
+});
+test('only a matching provided G2B number and revision becomes a notice-detail link; unsafe or secret URLs are omitted',()=>{
+ const url='https://www.g2b.go.kr/ep/invitation/publish/bidInfoDtl.do?bidno=R123&bidseq=00';assert.equal(links.classify(url,'g2b_bid','R123-000').kind,'detail');assert.equal(links.classify(url,'g2b_bid','R999-000').kind,'mismatch');assert.equal(links.classify(url,'g2b_bid','R123-001').kind,'mismatch');assert.equal(links.classify('https://www.g2b.go.kr/','g2b_bid','R123-000').kind,'reference');
+ for(const url of ['javascript:alert(1)','https://name:password@www.hub.go.kr/','https://apis.data.go.kr/service?serviceKey=private','https://www.data.go.kr/?access_token=private']){assert.equal(links.safeUrl(url),null);assert(!links.footer({id:1,source_url:url}).includes('private'));}
+ assert.equal(links.classify('https://www.example.go.kr/document.pdf').kind,'document');
+});
+test('source record returns the requested original row, field mappings and DB timestamps without exposing other projects, notes or raw credentials',async()=>{
+ const {PGlite}=require('@electric-sql/pglite'),db=new PGlite();await db.waitReady;try{
+ const query=async(sql,args=[])=>args.length?db.query(sql,args):(await db.exec(sql)).at(-1)||{rows:[]};const src=fs.readFileSync(require.resolve('../src/db'),'utf8'),ctx={query};vm.createContext(ctx);vm.runInContext(src.slice(src.indexOf('async function initDb'),src.indexOf('async function transaction')),ctx);await ctx.initDb();
+ const record=(await query("INSERT INTO projects(source,external_id,name,address,area_sqm,permit_date,source_url) VALUES('arch_hub_permit','1000000000000000000123','원래 프로젝트명','검증동 123',250,'2026-01-10',$1) RETURNING id",[provider])).rows[0];await query("INSERT INTO projects(name) VALUES('다른 프로젝트')");
+ const result=await readSourceRecord(query,record.id);assert.equal(result.id,String(record.id));assert.equal(result.name,'원래 프로젝트명');assert.equal(result.fields.find(f=>f.key==='external_id').value,'1000000000000000000123');assert.equal(result.fields.find(f=>f.key==='area_sqm').origin_field,'totArea');assert.equal(result.external.kind,'provider');assert(result.stored_at);assert(result.stored_updated_at);assert.equal(result.raw_response_available,false);assert(!JSON.stringify(result).includes('다른 프로젝트'));
+ await query("UPDATE projects SET source='g2b_bid',source_url=$1 WHERE id=$2",['https://apis.data.go.kr/?serviceKey=private',record.id]);const bid=await readSourceRecord(query,record.id);assert.equal(bid.external.url,null);assert(!JSON.stringify(bid).includes('private'));assert.equal(bid.fields.find(f=>f.key==='completion_date').label,'입찰 마감일');
+ await assert.rejects(readSourceRecord(query,'0'),e=>e.status===400);await assert.rejects(readSourceRecord(query,'1 OR TRUE'),e=>e.status===400);await assert.rejects(readSourceRecord(query,'999'),e=>e.status===404);
+ }finally{await db.close();}
+});
+test('source record endpoint requires authenticated users, forbids caching and does not return internal DB errors',async()=>{
+ const guard=()=>{};let route;registerSourceRecordRoute({get:(...args)=>route=args},{loadUser:guard,query:async()=>{throw Error('secret db credentials');}});assert.equal(route[1],guard);let code,body,cache;await route[2]({params:{id:'3'}},{set(k,v){cache=[k,v];},status(n){code=n;return this;},json(v){body=v;}});assert.equal(code,500);assert.deepEqual(cache,['Cache-Control','no-store']);assert(!JSON.stringify(body).includes('secret'));
+});
+async function page(data,status=200){const elements={sourceRecord:{textContent:'',innerHTML:''},sourceBack:{href:''}},calls=[];const ctx={ProjectSource:links,URLSearchParams,location:{search:'?projectId=3'},document:{getElementById:id=>elements[id]},fetch:async url=>{calls.push(url);return {status,ok:status===200,json:async()=>data};}};vm.createContext(ctx);await vm.runInContext(fs.readFileSync(require.resolve('../public/source-record.js'),'utf8'),ctx);return {elements,calls};}
+test('source page renders only matching records, escapes values and distinguishes login and missing records',async()=>{
+ const h=await page({id:'3',name:'<img src=x onerror=evil()>',source_name:'건축HUB',fields:[{key:'external_id',label:'관리번호',value:'1000000000000000000123'}],external:{url:provider,label:'데이터 제공기관 안내'},notes:['저장 자료입니다.']});assert(h.elements.sourceRecord.innerHTML.includes('&lt;img'));assert(!h.elements.sourceRecord.innerHTML.includes('<img'));assert(h.elements.sourceRecord.innerHTML.includes('1000000000000000000123'));assert.equal(h.calls[0],'/api/projects/3/source-record');assert.equal(h.elements.sourceBack.href,'/?projectId=3#projects');
+ assert((await page({error:'로그인 필요'},401)).elements.sourceRecord.innerHTML.includes('/login.html'));assert((await page({error:'저장 자료 없음'},404)).elements.sourceRecord.textContent.includes('저장 자료 없음'));assert((await page({id:'4'})).elements.sourceRecord.textContent.includes('일치하지 않습니다'));
+});
