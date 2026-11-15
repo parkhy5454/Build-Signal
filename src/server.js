@@ -1019,7 +1019,7 @@ app.get("/api/projects", async (req, res) => {
       (SELECT COUNT(*)::int FROM unified_contacts pc WHERE pc.canonical_id=p.id) AS contact_count,
       EXISTS(SELECT 1 FROM unified_contacts pc WHERE pc.canonical_id=p.id AND pc.phone IS NOT NULL AND pc.phone<>'') AS has_phone,
       EXISTS(SELECT 1 FROM unified_contacts pc WHERE pc.canonical_id=p.id AND pc.email IS NOT NULL AND pc.email<>'') AS has_email
-      FROM projects p JOIN unified_stats us ON us.canonical_id=p.id WHERE p.id IN (SELECT canonical_id FROM unified_matches)
+      FROM projects p JOIN unified_stats us ON us.canonical_id=p.id WHERE p.id IN (SELECT project_id FROM unified_matches)
       ORDER BY ${opportunity.sort==='recent'?'us.latest_update DESC':opportunityOrder(opportunity.sort)}, CASE WHEN $${params.length+1}::text <> '' AND p.name ILIKE $${params.length+2} THEN 0 ELSE 1 END,
         us.latest_update DESC,p.id DESC LIMIT $${params.length+3} OFFSET $${params.length+4}`,
       [...params, keyword, `${keyword}%`, l, (p-1)*l]);
