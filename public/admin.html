@@ -17,6 +17,8 @@ async function loadContactCoverage(){
  try{
   const r=await fetch('/api/admin/contacts/coverage');const d=await r.json();
   if(!r.ok)throw new Error(d.error||`HTTP ${r.status}`);
+  const u=await fetch('/api/admin/project-groups/unification');const combined=await u.json();
+  if(!u.ok)throw Error(combined.error||'통합 대조 조회 실패');
   const x=d.summary;
   el.textContent=`나라장터 현장 ${x.total}건\n발주처 업체명 ${x.client_org}건 / 전화번호 ${x.client_phone}건 / 이메일 ${x.client_email}건\n설계사 ${x.designer}건 / 감리사 ${x.supervisor}건 / 시공사 ${x.contractor}건`;
   rows.innerHTML='<table style="width:100%;font-size:12px;text-align:left"><thead><tr><th>현장</th><th>구분</th><th>업체</th><th>담당자</th><th>전화</th><th>이메일</th></tr></thead><tbody>'+d.contacts.map(c=>`<tr><td>${esc(c.project_name)}</td><td>${esc(c.role)}</td><td>${esc(c.organization)}</td><td>${esc(c.person_name)}</td><td>${esc(c.phone)}</td><td>${esc(c.email)}</td></tr>`).join('')+'</tbody></table>';
@@ -30,6 +32,7 @@ async function loadGroupHealth(){
   if(!r.ok)throw new Error(d.error||'조회 실패');
   const x=d.summary;
   summary.textContent='나라장터 공고 '+x.total_notices+'건 / 통합 프로젝트 '+x.total_groups+'개 (공고 연결된 그룹 '+x.active_groups+'개)\n연결 공고 '+x.linked_notices+'건 / 미연결 공고 '+x.unlinked_notices+'건\n※ 미연결은 오류가 아닐 수 있습니다. 보수적 통합 기준에 해당하지 않는 공고는 개별 유지됩니다.';
+  summary.textContent+='\n전체 원본 '+combined.source_records+'건 → 사용자 프로젝트 '+combined.project_rows+'건 / 묶인 사업 '+combined.combined_projects+'개 / 인허가·입찰 정확 대조 그룹 '+combined.exact_permit_bid_groups+'개 / 확인된 단계 연결 '+combined.confirmed_phase_links+'개';
   rows.innerHTML='<h3 style="margin-top:16px">최근 미연결 공고 (최대 40건)</h3><table style="width:100%;font-size:12px;text-align:left"><thead><tr><th>공고명</th><th>발주처</th><th>지역</th><th>진단</th></tr></thead><tbody>'+d.recent_unlinked.map(p=>'<tr><td>'+esc(p.name)+'</td><td>'+esc(p.owner)+'</td><td>'+esc(p.region)+'</td><td>'+esc(p.reason)+'</td></tr>').join('')+'</tbody></table>';
  }catch(e){summary.textContent='통합 프로젝트 연결 현황 조회 실패: '+e.message;}
  finally{btn.disabled=false;}

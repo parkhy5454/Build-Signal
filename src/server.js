@@ -24,6 +24,7 @@ const { meta:regionCatalogMeta,provinces,regionAliases,installRegionCatalog } = 
 const {createAwardCollector,awardKey}=require("./awards");
 const {createHubCollector,config:hubConstructionConfig,status:hubConstructionStatus}=require("./hub-construction");
 const {registerAwardRoutes}=require("./award-routes");
+const {searchScope,relatedProjects,unificationSummary}=require("./unified-projects");
 
 const app = express();
 // Render terminates HTTPS at its proxy; trust the proxy so secure session cookies are issued.
@@ -982,12 +983,12 @@ app.get("/api/projects", async (req, res) => {
     const selectedStage = String(stage || keywordStage || "");
     if(selectedStage && !STAGES.includes(selectedStage))return res.status(400).json({error:"잘못된 진행 단계입니다."});
     const keyword = keywordStage ? "" : rawKeyword;
-    if (keyword) add(`%${keyword}%`, "(EXISTS (SELECT 1 FROM project_party_evidence pe WHERE pe.project_id=p.id AND pe.organization ILIKE ?) OR p.name ILIKE ? OR p.address ILIKE ? OR p.owner ILIKE ? OR p.designer ILIKE ? OR p.contractor ILIKE ? OR EXISTS (SELECT 1 FROM project_contacts pc WHERE pc.project_id=p.id AND (pc.organization ILIKE ? OR pc.person_name ILIKE ?)))");
+    if (keyword) add(`%${keyword}%`, "(EXISTS (SELECT 1 FROM project_party_evidence pe WHERE pe.project_id=p.id AND pe.organization ILIKE ?) OR p.name ILIKE ? OR p.address ILIKE ? OR p.owner ILIKE ? OR p.designer ILIKE ? OR p.contractor ILIKE ? OR EXISTS (SELECT 1 FROM project_group_contacts gc WHERE gc.group_id=p.project_group_id AND (gc.organization ILIKE ? OR gc.person_name ILIKE ?)) OR EXISTS (SELECT 1 FROM project_contacts pc WHERE pc.project_id=p.id AND (pc.organization ILIKE ? OR pc.person_name ILIKE ?)))");
     if (region) {const names=regionAliases(String(region).slice(0,60));params.push(names.map(x=>`%${x}%`));where.push(`p.region ILIKE ANY($${params.length}::text[])`);}
     if (selectedStage) add(selectedStage, "p.stage = ?");
     if (type) add(`%${String(type).slice(0,80)}%`, "p.building_type ILIKE ?");
-    if (contact === 'any') where.push("(EXISTS (SELECT 1 FROM project_contacts pc WHERE pc.project_id=p.id) OR EXISTS(SELECT 1 FROM project_party_evidence pe WHERE pe.project_id=p.id))");
-    if (['client','designer','supervisor','contractor','owner','developer','applicant','operator'].includes(contact)) add(contact, "(EXISTS (SELECT 1 FROM project_contacts pc WHERE pc.project_id=p.id AND pc.role=?) OR EXISTS(SELECT 1 FROM project_party_evidence pe WHERE pe.project_id=p.id AND pe.role=?))");
+    if (contact === 'any') where.push("(EXISTS (SELECT 1 FROM project_contacts pc WHERE pc.project_id=p.id) OR EXISTS(SELECT 1 FROM project_party_evidence pe WHERE pe.project_id=p.id) OR EXISTS(SELECT 1 FROM project_group_contacts gc WHERE gc.group_id=p.project_group_id))");
+    if (['client','designer','supervisor','contractor','owner','developer','applicant','operator'].includes(contact)) add(contact, "(EXISTS (SELECT 1 FROM project_contacts pc WHERE pc.project_id=p.id AND pc.role=?) OR EXISTS(SELECT 1 FROM project_party_evidence pe WHERE pe.project_id=p.id AND pe.role=?) OR EXISTS(SELECT 1 FROM project_group_contacts gc WHERE gc.group_id=p.project_group_id AND gc.role=?))");
     if(opportunity.minArea!==null){params.push(opportunity.minArea);where.push(opportunity.includeUnknownArea?`(p.area_sqm >= $${params.length} OR p.area_sqm IS NULL OR p.area_sqm<=0)`:`p.area_sqm >= $${params.length}`);}
     if(opportunity.phase==='early')where.push("p.stage IN ('REVIEW','PERMIT')");
     const dateColumn = dateField === "collected" ? "p.created_at::date" : "CASE WHEN p.stage = 'PERMIT' THEN p.permit_date WHEN p.stage = 'STARTED' THEN p.start_date WHEN p.stage = 'BID' THEN p.source_updated_at WHEN p.stage = 'COMPLETED' THEN p.completion_date ELSE COALESCE(p.permit_date,p.start_date,p.source_updated_at) END";
@@ -998,20 +999,23 @@ app.get("/api/projects", async (req, res) => {
     }
     if(from && to && from>to)return res.status(400).json({error:"시작일이 종료일보다 늦습니다."});
     const clause = where.length ? `WHERE ${where.join(" AND ")}` : "";
-    const count = await query(`SELECT COUNT(*)::int AS n FROM projects p ${clause}`, params);
-    const rows = await query(`SELECT p.*,
+    const scope=searchScope(clause);
+    const count = await query(scope+` SELECT COUNT(*)::int AS n FROM unified_matches`, params);
+    const rows = await query(scope+` SELECT p.*,
+      CASE WHEN p.source='g2b_bid' THEN COALESCE((SELECT g.title FROM unified_group_roots g WHERE g.canonical_id=p.id LIMIT 1),p.name) ELSE p.name END AS name,
+      us.member_count,us.notice_count,us.trade_count,us.latest_update AS updated_at,
       (SELECT BOOL_OR(is_current) FROM review_extracted_projects rp WHERE rp.project_id=p.id) AS review_source_current,
       (SELECT decision_result FROM architectural_review_details ar WHERE ar.project_id=p.id) AS architectural_review_result,
-      (SELECT organization FROM project_party_evidence pe WHERE pe.project_id=p.id AND pe.role='owner' ORDER BY observed_at DESC,id DESC LIMIT 1) AS owner_evidence,
-      (SELECT organization FROM project_party_evidence pe WHERE pe.project_id=p.id AND pe.role='applicant' ORDER BY observed_at DESC,id DESC LIMIT 1) AS applicant_evidence,
-      (SELECT organization FROM project_party_evidence pe WHERE pe.project_id=p.id AND pe.role='developer' ORDER BY observed_at DESC,id DESC LIMIT 1) AS developer_evidence,
-      (SELECT COUNT(*)::int FROM project_party_evidence pe WHERE pe.project_id=p.id) AS party_count,
-      (SELECT COUNT(*)::int FROM project_contacts pc WHERE pc.project_id=p.id) AS contact_count,
-      EXISTS(SELECT 1 FROM project_contacts pc WHERE pc.project_id=p.id AND pc.phone IS NOT NULL AND pc.phone<>'') AS has_phone,
-      EXISTS(SELECT 1 FROM project_contacts pc WHERE pc.project_id=p.id AND pc.email IS NOT NULL AND pc.email<>'') AS has_email
-      FROM projects p ${clause}
-      ORDER BY ${opportunityOrder(opportunity.sort)}, CASE WHEN $${params.length+1}::text <> '' AND p.name ILIKE $${params.length+2} THEN 0 ELSE 1 END,
-        p.updated_at DESC,p.id DESC LIMIT $${params.length+3} OFFSET $${params.length+4}`,
+      (SELECT organization FROM project_party_evidence pe WHERE pe.project_id IN (SELECT project_id FROM unified_identity WHERE canonical_id=p.id) AND pe.role='owner' ORDER BY observed_at DESC,id DESC LIMIT 1) AS owner_evidence,
+      (SELECT organization FROM project_party_evidence pe WHERE pe.project_id IN (SELECT project_id FROM unified_identity WHERE canonical_id=p.id) AND pe.role='applicant' ORDER BY observed_at DESC,id DESC LIMIT 1) AS applicant_evidence,
+      (SELECT organization FROM project_party_evidence pe WHERE pe.project_id IN (SELECT project_id FROM unified_identity WHERE canonical_id=p.id) AND pe.role='developer' ORDER BY observed_at DESC,id DESC LIMIT 1) AS developer_evidence,
+      (SELECT COUNT(*)::int FROM project_party_evidence pe WHERE pe.project_id IN (SELECT project_id FROM unified_identity WHERE canonical_id=p.id)) AS party_count,
+      (SELECT COUNT(*)::int FROM unified_contacts pc WHERE pc.canonical_id=p.id) AS contact_count,
+      EXISTS(SELECT 1 FROM unified_contacts pc WHERE pc.canonical_id=p.id AND pc.phone IS NOT NULL AND pc.phone<>'') AS has_phone,
+      EXISTS(SELECT 1 FROM unified_contacts pc WHERE pc.canonical_id=p.id AND pc.email IS NOT NULL AND pc.email<>'') AS has_email
+      FROM projects p JOIN unified_stats us ON us.canonical_id=p.id WHERE p.id IN (SELECT canonical_id FROM unified_matches)
+      ORDER BY ${opportunity.sort==='recent'?'us.latest_update DESC':opportunityOrder(opportunity.sort)}, CASE WHEN $${params.length+1}::text <> '' AND p.name ILIKE $${params.length+2} THEN 0 ELSE 1 END,
+        us.latest_update DESC,p.id DESC LIMIT $${params.length+3} OFFSET $${params.length+4}`,
       [...params, keyword, `${keyword}%`, l, (p-1)*l]);
     let coverage=null;
     if(!count.rows[0].n){
@@ -1075,6 +1079,7 @@ app.get('/api/project-groups/:id',async(req,res)=>{
   res.json({...g.rows[0],notices:notices.rows,contacts:contacts.rows});
  }catch(e){res.status(500).json({error:e.message});}
 });
+app.get('/api/admin/project-groups/unification',loadUser,requireAdminRole,async(req,res)=>{try{res.json(await unificationSummary(query));}catch(e){res.status(500).json({error:e.message});}});
 // Read-only monitoring: does not regroup or mutate existing notices.
 app.get('/api/admin/project-groups/health',loadUser,requireAdminRole,async(req,res)=>{
  try{
@@ -1237,24 +1242,26 @@ app.post('/api/admin/early-projects/link',loadUser,requireAdminRole,async(req,re
 });
 app.get("/api/projects/:id", async (req, res) => {
   try {
-    const r = await query("SELECT p.*,(SELECT BOOL_OR(is_current) FROM review_extracted_projects rp WHERE rp.project_id=p.id) AS review_source_current FROM projects p WHERE p.id=$1", [req.params.id]);
+    const r = await query("SELECT p.*,CASE WHEN p.source='g2b_bid' THEN COALESCE((SELECT g.title FROM project_groups g WHERE g.id=p.project_group_id),p.name) ELSE p.name END AS name,(SELECT BOOL_OR(is_current) FROM review_extracted_projects rp WHERE rp.project_id=p.id) AS review_source_current FROM projects p WHERE p.id=$1", [req.params.id]);
     if (!r.rowCount) return res.status(404).json({ error: "현장을 찾을 수 없습니다." });
     const f = await query("SELECT id FROM favorites WHERE project_id=$1 AND user_key=$2", [req.params.id, String(req.user.id)]);
     const s = await query("SELECT status,note FROM sales_pipeline WHERE project_id=$1 AND user_key=$2", [req.params.id, String(req.user.id)]);
-    const awards=await query(`SELECT a.* FROM construction_awards a JOIN projects p ON p.source='g2b_bid' AND p.external_id=a.notice_no||'-'||a.notice_ord WHERE p.id=$1 ORDER BY a.award_date DESC NULLS LAST,a.id DESC LIMIT 100`,[req.params.id]);
-    const contacts = await query(`SELECT role,organization,department,person_name,phone,email,source,source_url,verified_at,updated_at
-      FROM project_contacts WHERE project_id=$1 ORDER BY CASE role WHEN 'client' THEN 1 WHEN 'designer' THEN 2 WHEN 'supervisor' THEN 3 ELSE 4 END, updated_at DESC`,[req.params.id]);
-    const master=await query('SELECT permit_id FROM project_phase_links WHERE early_id=$1',[req.params.id]);
-    const masterId=master.rows[0]?.permit_id||req.params.id;
-    const related=await query('SELECT early_id FROM project_phase_links WHERE permit_id=$1',[masterId]);
-    const ids=[...new Set([String(masterId),String(req.params.id),...related.rows.map(x=>String(x.early_id))])];
+    const linked=await relatedProjects(query,req.params.id);
+    const ids=linked.ids.length?linked.ids:[String(req.params.id)],masterId=linked.canonicalId;
+    const awards=await query(`SELECT DISTINCT a.* FROM construction_awards a JOIN projects p ON p.source='g2b_bid' AND p.external_id=a.notice_no||'-'||a.notice_ord WHERE p.id=ANY($1::bigint[]) ORDER BY a.award_date DESC NULLS LAST,a.id DESC LIMIT 100`,[ids]);
+    const contacts=await query(`SELECT role,organization,department,person_name,phone,email,source,source_url,verified_at,updated_at FROM project_contacts WHERE project_id=ANY($1::bigint[]) ORDER BY role,updated_at DESC`,[ids]);
+    const notices=await query(`SELECT p.id,p.name AS notice_title,p.building_type,p.stage,p.estimated_cost,p.source_url,p.owner,p.address,
+      COALESCE((SELECT json_agg(c ORDER BY c.updated_at DESC) FROM project_contacts c WHERE c.project_id=p.id),'[]'::json) AS contacts
+      FROM projects p WHERE p.source='g2b_bid' AND p.id=ANY($1::bigint[]) ORDER BY p.updated_at DESC,p.id DESC`,[ids]);
+    const groupContacts=await query(`SELECT c.role,c.organization,c.department,c.person_name,c.phone,c.email,c.source,c.source_url,c.verified_at,c.updated_at
+      FROM project_group_contacts c WHERE c.group_id IN (SELECT project_group_id FROM projects WHERE id=ANY($1::bigint[]) AND source='g2b_bid') ORDER BY c.role,c.updated_at DESC`,[ids]);
     const evidence=await query("SELECT pe.*,CASE WHEN pe.origin='hub_construction' THEN EXISTS(SELECT 1 FROM hub_construction_checks h WHERE h.project_id=pe.project_id AND pe.id=ANY(h.current_evidence_ids)) ELSE NULL END AS hub_source_current FROM project_party_evidence pe WHERE pe.project_id=ANY($1::bigint[]) ORDER BY pe.observed_at DESC,pe.id DESC LIMIT 100",[ids]);
     const hubChecks=await query('SELECT project_id,outcome,last_attempt_at,last_success_at,last_error,planned_start,planned_completion,reported_actual_start FROM hub_construction_checks WHERE project_id=ANY($1::bigint[])',[ids]);
-    const phases=await query('SELECT id,name,stage,permit_date,start_date,completion_date,source_updated_at,source_url FROM projects WHERE id=ANY($1::bigint[]) ORDER BY source_updated_at NULLS LAST,id',[ids]);
+    const phases=await query("SELECT id,name,stage,permit_date,start_date,completion_date,source_updated_at,source_url FROM projects WHERE id=ANY($1::bigint[]) AND source IS DISTINCT FROM 'g2b_bid' ORDER BY source_updated_at NULLS LAST,id",[ids]);
     const directory=await directoryMatches(query,evidence.rows);
     const architecture=await query('SELECT a.*,p.source_updated_at AS review_date FROM architectural_review_details a JOIN projects p ON p.id=a.project_id WHERE a.project_id=ANY($1::bigint[])',[ids]);
     const environmental=await query('SELECT e.*,p.source_updated_at AS notice_date FROM environment_review_details e JOIN projects p ON p.id=e.project_id WHERE e.project_id=ANY($1::bigint[])',[ids]);
-    res.json({ ...r.rows[0], contacts: contacts.rows,awards:awards.rows,hubConstruction:hubChecks.rows,partyEvidence:evidence.rows,companyDirectory:directory,environmentalReviews:environmental.rows,architecturalReviews:architecture.rows,directoryCoverage:coverageSummary((await query('SELECT source,last_success_at,last_error,record_count FROM directory_sync_state')).rows),phaseProjects:phases.rows,masterProjectId:masterId,favorite: !!f.rowCount, pipeline: s.rows[0] || { status: "NEW", note: "" } });
+    res.json({ ...r.rows[0], contacts: [...contacts.rows,...groupContacts.rows],relatedNotices:notices.rows,awards:awards.rows,hubConstruction:hubChecks.rows,partyEvidence:evidence.rows,companyDirectory:directory,environmentalReviews:environmental.rows,architecturalReviews:architecture.rows,directoryCoverage:coverageSummary((await query('SELECT source,last_success_at,last_error,record_count FROM directory_sync_state')).rows),phaseProjects:phases.rows,masterProjectId:masterId,favorite: !!f.rowCount, pipeline: s.rows[0] || { status: "NEW", note: "" } });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
