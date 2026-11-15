@@ -5,10 +5,14 @@ function esc(s){return String(s??"-").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&
 function stageSearch(value){return ({심의:"REVIEW",환경평가:"REVIEW",환경영향평가:"REVIEW",공람:"REVIEW",인허가:"PERMIT",허가:"PERMIT",착공:"STARTED",준공:"COMPLETED",사용승인:"COMPLETED",입찰:"BID"})[String(value).trim()]||"";}
 function emptyProjectSearch(d){
  const counts=d.coverage||{},stage=d.selectedStage;
- const message=stage&&counts[stage]===0?`${stageLabel[stage]} 단계로 저장된 현장이 아직 없습니다.`:'선택한 검색 조건에 맞는 현장이 없습니다. 지역·기간·연락처 조건을 확인해 주세요.';
- const coverage=d.coverage?'현재 저장 현황: '+Object.entries(stageLabel).map(([key,label])=>label+' '+fmt(counts[key])+'건').join(' · '):'';
- return `<div class="panel"><p>${esc(message)}</p><p>${esc(coverage)}</p><p>나라장터 입찰공고 수집만으로 인허가·착공·준공 현장이 확보되지는 않습니다. 인허가·착공은 건축HUB 수집 결과가 필요하며, 준공은 국토부 자료에 사용승인일이 있는 현장을 수집한 뒤 표시됩니다.</p></div>`;
+ const total=Object.values(counts).reduce((sum,n)=>sum+Number(n||0),0);
+ const message=stage&&counts[stage]===0?`${stageLabel[stage]} 단계 자료가 현재 검색 조건에 없습니다.`:total===0?'현재 조회할 수 있는 프로젝트 자료가 없습니다. 검색 조건을 확인해 주세요.':'선택한 검색 조건에 맞는 현장이 없습니다. 지역·기간·규모 조건을 바꿔 다시 찾아보세요.';
+ const available=Object.entries(stageLabel).filter(([key])=>key!==stage&&Number(counts[key]||0)>0);
+ const stages=available.length?'<p>다른 단계 자료에서 찾기</p><div class="empty-stage-actions">'+available.map(([key,label])=>'<button class="button light" type="button" onclick="searchStage(\''+key+'\')">'+esc(label)+' '+fmt(counts[key])+'건 보기</button>').join('')+'</div>':'';
+ const coverage=d.coverage&&total>0?'<p class="muted">현재 저장된 단계별 현장 '+Object.entries(stageLabel).filter(([key])=>Number(counts[key]||0)>0).map(([key,label])=>esc(label)+' '+fmt(counts[key])+'건').join(' · ')+'</p>':'';
+ return `<div class="panel"><p>${esc(message)}</p>${coverage}${stages}</div>`;
 }
+function searchStage(value){const select=$('stage');if(select){select.value=value;search(1);}}
 function fmt(n){return Number(n||0).toLocaleString("ko-KR");}
 function displayStage(p){return p.source==='environment_review'&&p.stage==='REVIEW'?'환경평가 공람(공개 시점)':stageLabel[p.stage]||'확인 필요';}
 function card(p,score){
