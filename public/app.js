@@ -152,25 +152,6 @@ async function loadRegionChoices(){
 }
 $('region').addEventListener('change',()=>{$('groupRegion').value=$('region').value;search(1);});
 $('groupRegion').addEventListener('change',()=>{$('region').value=$('groupRegion').value;groups(1);});
-async function loadAutomaticFreshness(){
- const out=$('autoFreshness');
- try{
-  const d=await api('/api/ingestion/freshness');
-  const time=v=>v?new Date(v).toLocaleString('ko-KR',{timeZone:'Asia/Seoul'}):'아직 없음';
-  const parts=[d.enabled?'서버 자동 갱신 활성':'서버 자동 갱신 중지'];
-  for(const row of d.sources){
-   const label=row.source==='hub_construction'?'HUB 공사현장 관계자':row.source==='awards'?'나라장터 최종낙찰':row.source==='bids'?'나라장터 입찰':row.source==='early'?'건축심의 공개자료':row.source==='environment_review'?'전국 환경평가 공람':row.source==='seoul_review'?'서울 건축위원회 의결조서':row.source==='national_review'?'전국 심의 공개문서 색인':row.source==='review_extract'?'심의 원문 프로젝트·건축주 분석':'국토부 인허가·착공·준공';
-   const running=row.lease_until&&new Date(row.lease_until)>new Date();
-   parts.push(label+': '+(!d.configured[row.source]?(row.source==='hub_construction'?'웹 연계 비활성 · 재이용 범위 확인 필요':'인증키 설정 필요'):running?'수집 중':row.last_error?'재시도 대기':'예약 대기')+' / 마지막 처리 성공 '+time(row.last_success_at));
-  }
-  if(d.seoulReview)parts.push('서울 심의 게시물 발견 '+fmt(d.seoulReview.discovered_posts)+'건 / 첨부 확인 '+fmt(d.seoulReview.checked_posts)+'건 / 지원 PDF 처리 '+fmt(d.seoulReview.processed_files)+'건 / 미지원 첨부 게시물 '+fmt(d.seoulReview.unsupported_posts)+'건 / PDF 오류 '+fmt(d.seoulReview.failed_files)+'건');
-  parts.push('국토부 자동 수집 대상 '+fmt(d.coverage.regions)+'개 지역 / 전체 페이지 순회 완료 '+fmt(d.coverage.completed_regions)+'개');
-  parts.push('전국 자료를 순차 적재 중입니다. 지역 선택은 저장된 자료를 검색하며, 미수집 지역은 아직 결과가 없을 수 있습니다.');
-  out.textContent=parts.join(' · ');
- }catch(e){out.textContent='자동 갱신 상태를 확인하지 못했습니다. 잠시 후 다시 확인해 주세요.';}
-}
-loadAutomaticFreshness();
-setInterval(()=>{if(!document.hidden)loadAutomaticFreshness();},60000);
 
 function partyEvidenceHtml(rows){
  const labels={owner:'건축주',developer:'사업시행자',applicant:'심의 신청인',designer:'설계사',contractor:'시공사',supervisor:'감리사',operator:'운영·관리사'};
@@ -217,5 +198,3 @@ function hubConstructionHtml(rows){
  if(!rows.length)return '';
  return '<section class="panel"><h3>HUB 공사현장 대조 기록</h3><p>예정일은 실제 착공·사용승인과 구분합니다. 업체 연락처는 공개 원문 기준이며 직통 담당자 번호로 보장하지 않습니다.</p>'+rows.map(r=>'<p>현장 #'+esc(r.project_id)+' · '+esc(({matched:'관리번호·주소·허가일 대조 성공',not_found:'HUB 조회 결과 없음 · 기존 근거 유지',error:'재확인 대기'})[r.outcome]||'확인 중')+'<br>마지막 정상 조회 '+esc(r.last_success_at?new Date(r.last_success_at).toLocaleString('ko-KR',{timeZone:'Asia/Seoul'}):'없음')+'<br>HUB 착공예정일 '+esc(r.planned_start||'미제공')+' · 준공예정일 '+esc(r.planned_completion||'미제공')+(r.last_error?'<br>'+esc(r.last_error):'')+'</p>').join('')+'<a href="https://www.hub.go.kr/portal/gis/css/idx-css-list.do" target="_blank" rel="noopener noreferrer">HUB 공사현장 조회 ↗</a></section>';
 }
-
-(async()=>{try{const d=await api('/api/ingestion/hub-construction');const labels={paused:'전체 자동 수집 중지',reuse_pending:'제공기관 재이용 범위 확인 대기',disabled:'웹 연계 비활성',enabled:'웹 연계 활성'};const n=d.counts||{};$('hubConstructionStatus').textContent=(labels[d.status]||'확인 중')+' · 저장 인허가 '+fmt(n.stored_permits)+'건 / 조회 조건 충족 '+fmt(n.eligible)+'건 / 조회 성공 '+fmt(n.checked)+'건 / 식별 대조 성공 '+fmt(n.matched)+'건 / 재확인 '+fmt(n.failed)+'건 / 최근 대조 업체 근거 '+fmt(n.current_party_records)+'건. '+d.scope+' '+d.note+(d.state.last_error?' · 최근 오류: '+d.state.last_error:'');}catch{$('hubConstructionStatus').textContent='HUB 참여업체 연계 현황을 확인하지 못했습니다.';}})();
