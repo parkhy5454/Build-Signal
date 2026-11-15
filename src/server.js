@@ -1008,17 +1008,17 @@ app.get("/api/projects", async (req, res) => {
     const scope=searchScope(clause);
     const count = await query(scope+` SELECT COUNT(*)::int AS n FROM unified_matches`, params);
     const rows = await query(scope+` SELECT p.*,
-      CASE WHEN p.source='g2b_bid' THEN COALESCE((SELECT g.title FROM unified_group_roots g WHERE g.canonical_id=p.id LIMIT 1),p.name) ELSE p.name END AS name,
+      CASE WHEN p.source='g2b_bid' THEN COALESCE((SELECT g.title FROM unified_group_roots g WHERE g.id=p.project_group_id LIMIT 1),p.name) ELSE p.name END AS name,
       us.member_count,us.notice_count,us.trade_count,us.latest_update AS updated_at,
       (SELECT BOOL_OR(is_current) FROM review_extracted_projects rp WHERE rp.project_id=p.id) AS review_source_current,
       (SELECT decision_result FROM architectural_review_details ar WHERE ar.project_id=p.id) AS architectural_review_result,
-      (SELECT organization FROM project_party_evidence pe WHERE pe.project_id IN (SELECT project_id FROM unified_identity WHERE canonical_id=p.id) AND pe.role='owner' ORDER BY observed_at DESC,id DESC LIMIT 1) AS owner_evidence,
-      (SELECT organization FROM project_party_evidence pe WHERE pe.project_id IN (SELECT project_id FROM unified_identity WHERE canonical_id=p.id) AND pe.role='applicant' ORDER BY observed_at DESC,id DESC LIMIT 1) AS applicant_evidence,
-      (SELECT organization FROM project_party_evidence pe WHERE pe.project_id IN (SELECT project_id FROM unified_identity WHERE canonical_id=p.id) AND pe.role='developer' ORDER BY observed_at DESC,id DESC LIMIT 1) AS developer_evidence,
-      (SELECT COUNT(*)::int FROM project_party_evidence pe WHERE pe.project_id IN (SELECT project_id FROM unified_identity WHERE canonical_id=p.id)) AS party_count,
-      (SELECT COUNT(*)::int FROM unified_contacts pc WHERE pc.canonical_id=p.id) AS contact_count,
-      EXISTS(SELECT 1 FROM unified_contacts pc WHERE pc.canonical_id=p.id AND pc.phone IS NOT NULL AND pc.phone<>'') AS has_phone,
-      EXISTS(SELECT 1 FROM unified_contacts pc WHERE pc.canonical_id=p.id AND pc.email IS NOT NULL AND pc.email<>'') AS has_email
+      (SELECT organization FROM project_party_evidence pe WHERE pe.project_id IN (SELECT project_id FROM unified_identity WHERE canonical_id=row_identity.canonical_id) AND pe.role='owner' ORDER BY observed_at DESC,id DESC LIMIT 1) AS owner_evidence,
+      (SELECT organization FROM project_party_evidence pe WHERE pe.project_id IN (SELECT project_id FROM unified_identity WHERE canonical_id=row_identity.canonical_id) AND pe.role='applicant' ORDER BY observed_at DESC,id DESC LIMIT 1) AS applicant_evidence,
+      (SELECT organization FROM project_party_evidence pe WHERE pe.project_id IN (SELECT project_id FROM unified_identity WHERE canonical_id=row_identity.canonical_id) AND pe.role='developer' ORDER BY observed_at DESC,id DESC LIMIT 1) AS developer_evidence,
+      (SELECT COUNT(*)::int FROM project_party_evidence pe WHERE pe.project_id IN (SELECT project_id FROM unified_identity WHERE canonical_id=row_identity.canonical_id)) AS party_count,
+      (SELECT COUNT(*)::int FROM unified_contacts pc WHERE pc.canonical_id=row_identity.canonical_id) AS contact_count,
+      EXISTS(SELECT 1 FROM unified_contacts pc WHERE pc.canonical_id=row_identity.canonical_id AND pc.phone IS NOT NULL AND pc.phone<>'') AS has_phone,
+      EXISTS(SELECT 1 FROM unified_contacts pc WHERE pc.canonical_id=row_identity.canonical_id AND pc.email IS NOT NULL AND pc.email<>'') AS has_email
       FROM projects p JOIN unified_identity row_identity ON row_identity.project_id=p.id JOIN unified_stats us ON us.canonical_id=row_identity.canonical_id WHERE p.id IN (SELECT project_id FROM unified_matches)
       ORDER BY ${opportunity.sort==='recent'?'us.latest_update DESC':opportunityOrder(opportunity.sort)}, CASE WHEN $${params.length+1}::text <> '' AND p.name ILIKE $${params.length+2} THEN 0 ELSE 1 END,
         us.latest_update DESC,p.id DESC LIMIT $${params.length+3} OFFSET $${params.length+4}`,
