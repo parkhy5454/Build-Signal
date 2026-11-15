@@ -21,7 +21,7 @@ test('real PostgreSQL combines scale, unknown scale, early stage, region and sor
   const query=async(sql,args=[])=>args.length?db.query(sql,args):(await db.exec(sql)).at(-1)||{rows:[]};
   const schema=fs.readFileSync(require.resolve('../src/db'),'utf8'),init={query};vm.createContext(init);vm.runInContext(schema.slice(schema.indexOf('async function initDb'),schema.indexOf('async function transaction')),init);await init.initDb();
   await query("INSERT INTO projects(name,stage,area_sqm,region,building_type) VALUES ('큰 호텔','PERMIT',20000,'서울특별시','숙박시설'),('작은 호텔','PERMIT',3000,'서울특별시','숙박시설'),('미확인 호텔','REVIEW',NULL,'서울특별시','숙박시설'),('착공 호텔','STARTED',50000,'경기도','숙박시설')");
-  let handler;const ctx={...options,query,regionAliases:require('../src/region-catalog').regionAliases,STAGES:['REVIEW','PERMIT','STARTED','COMPLETED','BID','UNKNOWN'],app:{get:(p,h)=>handler=h}};vm.createContext(ctx);
+  let handler;const ctx={...options,...require('../src/unified-projects'),query,regionAliases:require('../src/region-catalog').regionAliases,STAGES:['REVIEW','PERMIT','STARTED','COMPLETED','BID','UNKNOWN'],app:{get:(p,h)=>handler=h}};vm.createContext(ctx);
   const src=fs.readFileSync(require.resolve('../src/server'),'utf8'),start=src.indexOf('app.get("/api/projects",');vm.runInContext(src.slice(start,src.indexOf("app.get('/api/contacts/summary'",start)),ctx);
   async function search(params){let data,code=200;await handler({query:params},{status(n){code=n;return this;},json(v){data=v;}});assert.equal(code,200,JSON.stringify(data));return data;}
   assert.equal((await search({minArea:'10000',phase:'early'})).total,1);
