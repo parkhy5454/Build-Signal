@@ -38,7 +38,7 @@ async function initDb() {
       last_attempt_at TIMESTAMPTZ,last_success_at TIMESTAMPTZ,last_error TEXT,
       lease_token TEXT,lease_until TIMESTAMPTZ,call_day DATE,daily_calls INTEGER NOT NULL DEFAULT 0
     );
-    INSERT INTO auto_ingest_state(source) VALUES('permits'),('bids'),('awards'),('early'),('environment_review'),('seoul_review'),('national_review'),('review_extract') ON CONFLICT DO NOTHING;
+    INSERT INTO auto_ingest_state(source) VALUES('permits'),('bids'),('awards'),('hub_construction'),('early'),('environment_review'),('seoul_review'),('national_review'),('review_extract') ON CONFLICT DO NOTHING;
     CREATE TABLE IF NOT EXISTS construction_awards (
       id BIGSERIAL PRIMARY KEY,event_key TEXT NOT NULL UNIQUE,notice_no TEXT NOT NULL,notice_ord TEXT NOT NULL,
       classification_no TEXT NOT NULL,rebid_no TEXT NOT NULL,name TEXT NOT NULL,winner TEXT NOT NULL,business_no TEXT,
@@ -137,6 +137,14 @@ async function initDb() {
     CREATE INDEX IF NOT EXISTS idx_projects_region ON projects(region, district);
     CREATE INDEX IF NOT EXISTS idx_projects_stage ON projects(stage);
     CREATE INDEX IF NOT EXISTS idx_projects_updated ON projects(updated_at DESC);
+    CREATE TABLE IF NOT EXISTS hub_construction_checks (
+      project_id BIGINT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,ledger_id TEXT NOT NULL,
+      outcome TEXT NOT NULL CHECK(outcome IN ('matched','not_found','error')),
+      last_attempt_at TIMESTAMPTZ NOT NULL,last_success_at TIMESTAMPTZ,last_error TEXT,
+      next_due_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),current_evidence_ids BIGINT[] NOT NULL DEFAULT '{}',
+      planned_start DATE,planned_completion DATE,reported_actual_start DATE,withheld_count INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS idx_hub_construction_due ON hub_construction_checks(next_due_at);
     CREATE TABLE IF NOT EXISTS early_source_documents (
       url TEXT PRIMARY KEY,title TEXT NOT NULL,content_hash TEXT,record_count INTEGER NOT NULL DEFAULT 0,
       last_checked_at TIMESTAMPTZ,last_error TEXT
