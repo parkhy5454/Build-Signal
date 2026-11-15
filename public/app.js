@@ -13,7 +13,7 @@ function fmt(n){return Number(n||0).toLocaleString("ko-KR");}
 function displayStage(p){return p.source==='environment_review'&&p.stage==='REVIEW'?'환경평가 공람(공개 시점)':stageLabel[p.stage]||'확인 필요';}
 function card(p,score){
  const badges=[p.notice_count?`<span class="signal-tag">입찰공고 ${fmt(p.notice_count)}건 · 공종 ${fmt(p.trade_count)}개</span>`:'',p.party_count?`<span class="signal-tag">참여업체 근거 ${fmt(p.party_count)}건</span>`:'',p.has_phone?'<span class="signal-tag success">☎ 전화 확보</span>':'',p.has_email?'<span class="signal-tag success">✉ 이메일 확보</span>':'',p.contact_count>0?`<span class="signal-tag">${fmt(p.contact_count)}개 연락처</span>`:''].filter(Boolean).join('');
- return `<article class="project-card"><div class="project-main"><div class="project-topline"><span class="tag ${p.stage==="STARTED"?"green":""}">${esc(displayStage(p))}</span><span class="project-source">${esc(p.source==='g2b_bid'?'나라장터 실제 공고':p.source==='demo'?'데모 데이터':p.source==='arch_hub_permit'?'건축HUB 인허가':p.source==='public_review'?'지자체 심의자료':p.source==='document_review'?'공식 심의 PDF 원문':p.source==='seoul_review'?'서울시 건축위원회 의결조서':p.source==='environment_review'?'국립환경과학원 EIASS 공개자료':p.source||'')}</span></div><h4>${esc(p.name)}</h4><p>${esc(p.address||"현장 주소 확인 중")}</p><div class="meta"><span>${p.owner?'발주처':p.owner_evidence?'건축주(원문 추출)':p.applicant_evidence?'심의 신청인(원문 추출)':p.developer_evidence?'사업시행자(원문 추출)':'건축주'}: ${esc(p.owner||p.owner_evidence||p.applicant_evidence||p.developer_evidence||(p.source==='seoul_review'?'원문 미제공':'확인 중'))}</span><span>용도·공종: ${esc(p.source==='g2b_bid'&&p.trade_count>1?'공종 '+fmt(p.trade_count)+'개':p.building_type||"미확인")} · 연면적: ${esc(ProjectWorkspace.area(p))}</span><span>${esc(p.region||"")}</span></div><div class="signal-tags">${p.source==='document_review'&&p.review_source_current===false?'<span class="signal-tag">과거 원문 기록 · 현재 안건 재확인 필요</span>':''}${p.architectural_review_result?'<span class="signal-tag">'+esc(p.architectural_review_result)+'</span>':''}${badges||'<span class="signal-tag muted-tag">연락처 확인 중</span>'}</div></div><div class="card-actions">${score!==undefined?`<span class="score">${score}점</span>`:""}<button class="button primary" onclick="detail(${Number(p.id)})">상세·연락처 보기</button></div></article>`;
+ return `<article class="project-card"><div class="project-main"><div class="project-topline"><span class="tag ${p.stage==="STARTED"?"green":""}">${esc(displayStage(p))}</span><span class="project-source">${esc(p.source==='g2b_bid'?'나라장터 실제 공고':p.source==='demo'?'데모 데이터':p.source==='arch_hub_permit'?'건축HUB 인허가':p.source==='public_review'?'지자체 심의자료':p.source==='document_review'?'공식 심의 PDF 원문':p.source==='seoul_review'?'서울시 건축위원회 의결조서':p.source==='environment_review'?'국립환경과학원 EIASS 공개자료':p.source||'')}</span></div><h4>${esc(p.name)}</h4><p>${esc(p.address||"현장 주소 확인 중")}</p><div class="meta"><span>${p.owner?'발주처':p.owner_evidence?'건축주(원문 추출)':p.applicant_evidence?'심의 신청인(원문 추출)':p.developer_evidence?'사업시행자(원문 추출)':'건축주'}: ${esc(p.owner||p.owner_evidence||p.applicant_evidence||p.developer_evidence||(p.source==='seoul_review'?'원문 미제공':'확인 중'))}</span><span>용도·공종: ${esc(p.source==='g2b_bid'&&p.trade_count>1?'공종 '+fmt(p.trade_count)+'개':p.building_type||"미확인")} · 연면적: ${esc(ProjectWorkspace.area(p))}</span><span>${esc(p.region||"")}</span></div><div class="signal-tags">${p.source==='document_review'&&p.review_source_current===false?'<span class="signal-tag">과거 원문 기록 · 현재 안건 재확인 필요</span>':''}${p.architectural_review_result?'<span class="signal-tag">'+esc(p.architectural_review_result)+'</span>':''}${badges||'<span class="signal-tag muted-tag">연락처 확인 중</span>'}</div>${Array.isArray(p.recommendation_reasons)?'<ul class="recommend-reasons">'+p.recommendation_reasons.map(reason=>'<li>'+esc(reason)+'</li>').join('')+'</ul>':''}</div><div class="card-actions">${score!==undefined?`<span class="score">${score}점</span>`:""}<button class="button primary" onclick="detail(${Number(p.id)})">상세·연락처 보기</button></div></article>`;
 }
 async function api(url,opts){const r=await fetch(url,opts);const d=await r.json();if(!r.ok)throw new Error(d.error||"요청에 실패했습니다.");return d;}
 async function contactSummary(){
@@ -48,7 +48,7 @@ async function search(page=1){
   $("prevPage").disabled=searchPage<=1;$("nextPage").disabled=searchPage>=searchTotalPages;
  }catch(e){if(request!==searchRequest)return;$("projectResults").innerHTML=`<div class="notice">${esc(e.message)}</div>`;$("resultCount").textContent="검색하지 못했습니다. 다시 시도해 주세요.";$("resultCountSummary").textContent="—";}finally{if(request===searchRequest)$("projectResults").setAttribute("aria-busy","false");}
 }
-async function recommendations(){try{const d=await api("/api/recommendations?profile="+$("profile").value);$("recommendResults").innerHTML=d.rows.length?d.rows.map(p=>card(p,p.score)).join(""):'<div class="panel">추천할 현장이 없습니다.</div>';}catch(e){$("recommendResults").innerHTML=`<div class="notice">${esc(e.message)}</div>`;}}
+async function recommendations(){return window.RecommendationSearch.load();}
 async function favorites(){try{const d=await api("/api/favorites");$("favoriteResults").innerHTML=d.rows.length?d.rows.map(p=>card(p)).join(""):'<div class="panel">관심 현장이 없습니다. 현장 상세에서 ☆ 관심 등록을 눌러주세요.</div>';}catch(e){$("favoriteResults").innerHTML=`<div class="notice">${esc(e.message)}</div>`;}}
 const roleLabels={client:'발주기관',designer:'설계사',supervisor:'감리사',contractor:'시공사'};
 function contactCard(c){
@@ -94,7 +94,7 @@ $("searchPeriod").onchange=()=>{const custom=$("searchPeriod").value==="custom";
 $("dateField").onchange=()=>search(1);
 $("projectSearchForm").addEventListener("submit",e=>{e.preventDefault();search(1);});
 $("prevPage").onclick=()=>{if(searchPage>1)search(searchPage-1);};
-$("nextPage").onclick=()=>{if(searchPage<searchTotalPages)search(searchPage+1);};$("recommendBtn").onclick=recommendations;$("closeModal").onclick=()=>$("modal").classList.add("hidden");$("modal").onclick=e=>{if(e.target===$("modal"))$("modal").classList.add("hidden");};
+$("nextPage").onclick=()=>{if(searchPage<searchTotalPages)search(searchPage+1);};$("closeModal").onclick=()=>$("modal").classList.add("hidden");$("modal").onclick=e=>{if(e.target===$("modal"))$("modal").classList.add("hidden");};
 
 (async()=>{
   try {
@@ -114,9 +114,9 @@ $("nextPage").onclick=()=>{if(searchPage<searchTotalPages)search(searchPage+1);}
 async function loadRegionChoices(){
  try{
   const d=await api('/api/regions');
-  for(const id of ['region']){
+  for(const id of ['region','recommendRegion']){
    const select=$(id),selected=select.value;select.replaceChildren();
-   const all=document.createElement('option');all.value='';all.textContent='전체 지역';select.appendChild(all);
+   const all=document.createElement('option');all.value='';all.textContent=id==='recommendRegion'?'전국 전체':'전체 지역';select.appendChild(all);
    for(const region of d.regions){const opt=document.createElement('option');opt.value=region.value;opt.textContent=region.label;select.appendChild(opt);}
    select.value=selected;
   }

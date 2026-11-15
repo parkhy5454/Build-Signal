@@ -31,6 +31,8 @@ jobs:
           node --check src/unified-projects.js
           node --check src/data-readiness.js
           node --check src/source-record.js
+          node --check src/recommendations.js
+          node --check public/recommendations.js
           node --check public/project-source.js
           node --check public/source-record.js
           node --check public/admin-data-readiness.js

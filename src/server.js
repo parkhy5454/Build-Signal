@@ -26,6 +26,7 @@ const {createHubCollector,config:hubConstructionConfig,status:hubConstructionSta
 const {registerAwardRoutes}=require("./award-routes");
 const {registerDataReadinessRoute}=require("./data-readiness");
 const {registerSourceRecordRoute}=require("./source-record");
+const {registerRecommendationRoutes}=require("./recommendations");
 const {searchScope,relatedProjects,unificationSummary}=require("./unified-projects");
 
 const app = express();
@@ -1789,15 +1790,7 @@ app.get('/api/permits/leads',async(req,res)=>{
  }catch(e){res.status(500).json({error:'건축허가 영업 우선순위 조회 실패'});}
 });
 
-app.get("/api/recommendations", async (req, res) => {
-  try {
-    const key = profiles[req.query.profile] ? req.query.profile : "automation";
-    const rows = await query("SELECT * FROM projects ORDER BY updated_at DESC LIMIT 500");
-    const ranked = rows.rows.map(x => ({ ...x, score: scoreProject(x, key), profile: profiles[key].label }))
-      .sort((a,b) => b.score - a.score).slice(0, 100);
-    res.json({ profile: profiles[key].label, rows: ranked });
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
+registerRecommendationRoutes(app,{query,regionAliases});
 
 app.get("/api/favorites", async (req, res) => {
   try {
